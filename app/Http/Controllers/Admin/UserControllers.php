@@ -35,6 +35,9 @@ class UserControllers extends Controller
         if ($this->request->input('username')) {
             $user = $user->where('name', 'like', '%' . $this->request->input('username') . '%');
         }
+        if ($this->request->filled('employment_status')) {
+            $user = $user->where('employment_status', $this->request->input('employment_status'));
+        }
         $user = $user->with('department')->paginate($pageSize, ['*'], 'page', $page);
         if ($user->items()) {
             foreach ($user->items() as $values) {

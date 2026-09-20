@@ -76,6 +76,26 @@ Route::group(['namespace' => 'Admin', 'middleware' => ['cross', 'auth:sanctum', 
         Route::post('delivery/tasks/status', 'Business\\DeliveryController@taskStatus')->name('business.delivery.tasks.status')->defaults('permission', 'delivery.task.manage');
         Route::post('delivery/evidences/submit', 'Business\\DeliveryController@submitEvidence')->name('business.delivery.evidences.submit')->defaults('permission', 'delivery.evidence.submit');
         Route::post('delivery/evidences/review', 'Business\\DeliveryController@reviewEvidence')->name('business.delivery.evidences.review')->defaults('permission', 'delivery.quality.review');
+
+        Route::post('payroll/sheets/list', 'Business\\PayrollController@sheets')->name('business.payroll.sheets.list')->defaults('permission', 'hr.payroll.view');
+        Route::get('payroll/sheets/detail', 'Business\\PayrollController@sheetDetail')->name('business.payroll.sheets.detail')->defaults('permission', 'hr.payroll.view');
+        Route::post('payroll/sheets/create', 'Business\\PayrollController@createSheet')->name('business.payroll.sheets.create')->defaults('permission', 'hr.payroll.hr.manage');
+        Route::post('payroll/sheets/update', 'Business\\PayrollController@updateSheet')->name('business.payroll.sheets.update')->defaults('permission', 'hr.payroll.hr.manage');
+        Route::post('payroll/sheets/delete', 'Business\\PayrollController@deleteSheet')->name('business.payroll.sheets.delete')->defaults('permission', 'hr.payroll.hr.manage');
+        Route::post('payroll/items/list', 'Business\\PayrollController@items')->name('business.payroll.items.list')->defaults('permission', 'hr.payroll.view');
+        Route::get('payroll/items/detail', 'Business\\PayrollController@itemDetail')->name('business.payroll.items.detail')->defaults('permission', 'hr.payroll.view');
+        Route::post('payroll/items/create', 'Business\\PayrollController@createItem')->name('business.payroll.items.create')->defaults('permission', 'hr.payroll.hr.manage');
+        Route::post('payroll/items/update', 'Business\\PayrollController@updateItem')->name('business.payroll.items.update')->defaults('permission', 'hr.payroll.hr.manage');
+        Route::post('payroll/items/delete', 'Business\\PayrollController@deleteItem')->name('business.payroll.items.delete')->defaults('permission', 'hr.payroll.hr.manage');
+        Route::post('payroll/sheets/submit-manager-review', 'Business\\PayrollController@submitManagerReview')->name('business.payroll.sheets.submit-manager-review')->defaults('permission', 'hr.payroll.hr.manage');
+        Route::post('payroll/items/manager-review', 'Business\\PayrollController@managerReview')->name('business.payroll.items.manager-review')->defaults('permission', 'hr.payroll.manager.confirm');
+        Route::post('payroll/sheets/submit-finance-review', 'Business\\PayrollController@submitFinanceReview')->name('business.payroll.sheets.submit-finance-review')->defaults('permission', 'hr.payroll.hr.manage');
+        Route::post('payroll/sheets/finance-review', 'Business\\PayrollController@financeReview')->name('business.payroll.sheets.finance-review')->defaults('permission', 'hr.payroll.finance.review');
+        Route::post('payroll/sheets/admin-review', 'Business\\PayrollController@adminReview')->name('business.payroll.sheets.admin-review')->defaults('permission', 'hr.payroll.admin.approve');
+        Route::post('payroll/items/admin-adjust', 'Business\\PayrollController@adminAdjust')->name('business.payroll.items.admin-adjust')->defaults('permission', 'hr.payroll.admin.approve');
+        Route::post('payroll/items/employee-action', 'Business\\PayrollController@employeeAction')->name('business.payroll.items.employee-action')->defaults('permission', 'hr.payroll.employee.confirm');
+        Route::post('payroll/items/appeal-resolve', 'Business\\PayrollController@resolveAppeal')->name('business.payroll.items.appeal-resolve')->defaults('permission', 'hr.payroll.appeal.resolve');
+        Route::post('payroll/sheets/mark-paid', 'Business\\PayrollController@markPaid')->name('business.payroll.sheets.mark-paid')->defaults('permission', 'hr.payroll.pay');
     });
 
     Route::post('role/list', 'RoleControllers@list')->name('role-list');
