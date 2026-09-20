@@ -51,7 +51,7 @@ return [
         'public' => [
             'driver' => 'local',
             'root' => storage_path('app/public'),
-            'url' => env('APP_URL').'/storage',
+            'url' => env('APP_URL') . '/storage',
             'visibility' => 'public',
         ],
 
@@ -74,7 +74,7 @@ return [
             ],
             'access_key' => env('QINIU_ACCESS_KEY'),                          //AccessKey
             'secret_key' => env('QINIU_SECRET_KEY'),  //SecretKey
-            'bucket' => env('QINIU_BUCKET') . 'thesiswdw',                                  //Bucket名字
+            'bucket' => env('QINIU_BUCKET') . 'ppyw',                                  //Bucket名字
             'notify_url' => '',                                               //持久化处理回调地址
         ],
 
