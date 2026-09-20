@@ -10,6 +10,7 @@ use App\Http\Services\UserServices;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 
 class UserControllers extends Controller
 {
@@ -95,7 +96,6 @@ class UserControllers extends Controller
         $this->request->validate([
             'username' => ['required', 'unique:' . (new User())->getTable() . ',name'],
             'password' => 'required',
-            'email' => ['required', 'unique:' . (new User())->getTable() . ',email'],
             'department_id' => ['required', 'exists:' . (new Department())->getTable() . ',id'],
             'employee_no' => ['nullable', 'string', 'max:64', 'unique:' . (new User())->getTable() . ',employee_no'],
             'mobile' => ['nullable', 'string', 'max:32'],
@@ -121,7 +121,6 @@ class UserControllers extends Controller
             'name' => $this->request->input('username'),
             'password' => Hash::make($this->request->input('password')),
             'department_id' => $this->request->input('department_id'),
-            'email' => $this->request->input('email'),
         ]);
 
         return User::create($data);
@@ -140,7 +139,6 @@ class UserControllers extends Controller
         $this->request->validate([
             'id' => ['required', 'exists:' . (new User())->getTable() . ',id'],
             'username' => ['required', 'unique:' . (new User())->getTable() . ',name,' . $id],
-            'email' => ['required', 'unique:' . (new User())->getTable() . ',email,' . $id],
             'department_id' => ['required', 'exists:' . (new Department())->getTable() . ',id'],
             'employee_no' => ['nullable', 'string', 'max:64', 'unique:' . (new User())->getTable() . ',employee_no,' . $id],
             'mobile' => ['nullable', 'string', 'max:32'],
@@ -164,7 +162,6 @@ class UserControllers extends Controller
         $data = $this->employeeData();
         $data['department_id'] = $this->request->input('department_id');
         $data['name'] = $this->request->input('username');
-        $data['email'] = $this->request->input('email');
         if ($this->request->input('password')) {
             $data['password'] = Hash::make($this->request->input('password'));
         }
