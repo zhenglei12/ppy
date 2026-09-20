@@ -21,9 +21,9 @@ class UserServices
     public function login($name, $password)
     {
         $user = User::where('name', $name)->first();
-        // if (!$user || !\Hash::check($password, $user->password)) {
-        //     throw \ExceptionFactory::business(CodeMessageConstants::NAME_ERROR);
-        // }
+        if (!$user || !\Hash::check($password, $user->password)) {
+            throw \ExceptionFactory::business(CodeMessageConstants::NAME_ERROR);
+        }
         //   $this->deleteToken($user->id); //删除token
         $data['token'] = $user->createToken('admin')->plainTextToken; //生成新的token
         return $data;
