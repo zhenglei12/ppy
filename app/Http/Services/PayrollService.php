@@ -13,7 +13,10 @@ use Illuminate\Support\Str;
 
 class PayrollService
 {
-    public const HR_FIELDS = ['base_salary', 'allowance_amount', 'attendance_deduction'];
+    public const HR_FIELDS = [
+        'base_salary', 'allowance_amount', 'attendance_deduction',
+        'social_security', 'housing_fund', 'personal_tax',
+    ];
 
     public const PERFORMANCE_FIELDS = ['sales_commission', 'performance_bonus', 'project_bonus', 'management_bonus'];
 
@@ -57,9 +60,10 @@ class PayrollService
     public function syncSheetTotals(int $sheetId): PayrollSheet
     {
         $sheet = PayrollSheet::lockForUpdate()->findOrFail($sheetId);
+        $items = $this->excludeSuperAdminItems(PayrollItem::query()->where('payroll_sheet_id', $sheetId));
         $sheet->update([
-            'total_gross_amount' => PayrollItem::where('payroll_sheet_id', $sheetId)->sum('gross_salary'),
-            'total_net_amount' => PayrollItem::where('payroll_sheet_id', $sheetId)->sum('net_salary'),
+            'total_gross_amount' => (clone $items)->sum('gross_salary'),
+            'total_net_amount' => $items->sum('net_salary'),
         ]);
 
         return $sheet->fresh();
@@ -78,9 +82,27 @@ class PayrollService
 
     public function applyItemScope(Builder $query): Builder
     {
+        $query = $this->excludeSuperAdminItems($query);
         $ids = $this->visibleUserIds();
 
         return $ids === null ? $query : $query->whereIn('user_id', $ids);
+    }
+
+    public function excludeSuperAdminItems(Builder $query): Builder
+    {
+        return $query->whereDoesntHave('user.roles', fn (Builder $role) => $role->where('alias', 'admin'));
+    }
+
+    public function sheetItems(int $sheetId): Builder
+    {
+        return $this->excludeSuperAdminItems(
+            PayrollItem::query()->where('payroll_sheet_id', $sheetId)
+        );
+    }
+
+    public function isSuperAdminUser(User $user): bool
+    {
+        return $user->roles->contains('alias', 'admin');
     }
 
     /**
@@ -145,6 +167,8 @@ class PayrollService
 
     public function createApprovalCycle(PayrollSheet $sheet): int
     {
+        $sheet->setRelation('items', $this->sheetItems($sheet->id)->get());
+
         return DB::table('approval_instances')->insertGetId([
             'approval_no' => 'PAYROLL-'.now()->format('YmdHis').'-'.strtoupper(Str::random(6)),
             'business_type' => 'payroll',
@@ -155,13 +179,13 @@ class PayrollService
             'current_step' => 1,
             'applicant_id' => Auth::id(),
             'submitted_at' => now(),
-            'snapshot_data' => json_encode($sheet->load('items')->toArray(), JSON_UNESCAPED_UNICODE),
+            'snapshot_data' => json_encode($sheet->toArray(), JSON_UNESCAPED_UNICODE),
             'created_at' => now(),
             'updated_at' => now(),
         ]);
     }
 
-    public function logApproval(PayrollSheet $sheet, int $step, string $stepName, string $action, string $comment = null): void
+    public function logApproval(PayrollSheet $sheet, int $step, string $stepName, string $action, ?string $comment = null): void
     {
         $instance = DB::table('approval_instances')
             ->where('business_type', 'payroll')

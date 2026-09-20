@@ -25,7 +25,7 @@ class PayrollController extends Controller
         $query = PayrollSheet::query()->with([
             'calculatedBy:id,name', 'submittedBy:id,name', 'financeReviewedBy:id,name',
             'adminApprovedBy:id,name', 'paidBy:id,name',
-        ])->withCount('items');
+        ])->withCount(['items' => fn (Builder $q) => $this->payroll->excludeSuperAdminItems($q)]);
         $visibleUserIds = $this->payroll->visibleUserIds();
         if ($visibleUserIds !== null) {
             $query->whereHas('items', fn (Builder $q) => $q->whereIn('user_id', $visibleUserIds));
@@ -35,12 +35,13 @@ class PayrollController extends Controller
 
         $result = $query->latest('period_month')->paginate($request->integer('pageSize', 20));
         $result->getCollection()->transform(function (PayrollSheet $sheet) use ($visibleUserIds) {
+            $visibleItems = $this->payroll->sheetItems($sheet->id);
             if ($visibleUserIds !== null) {
-                $visibleItems = PayrollItem::where('payroll_sheet_id', $sheet->id)->whereIn('user_id', $visibleUserIds);
-                $sheet->items_count = (clone $visibleItems)->count();
-                $sheet->total_gross_amount = number_format((float) (clone $visibleItems)->sum('gross_salary'), 2, '.', '');
-                $sheet->total_net_amount = number_format((float) $visibleItems->sum('net_salary'), 2, '.', '');
+                $visibleItems->whereIn('user_id', $visibleUserIds);
             }
+            $sheet->items_count = (clone $visibleItems)->count();
+            $sheet->total_gross_amount = number_format((float) (clone $visibleItems)->sum('gross_salary'), 2, '.', '');
+            $sheet->total_net_amount = number_format((float) $visibleItems->sum('net_salary'), 2, '.', '');
             $sheet->setAttribute('available_actions', $this->sheetActions($sheet));
 
             return $sheet;
@@ -62,11 +63,8 @@ class PayrollController extends Controller
             ->orderBy('id')
             ->get();
         abort_if($items->isEmpty() && ! $this->payroll->isPrivilegedViewer(), 403, '无权查看该工资表');
-        $visibleUserIds = $this->payroll->visibleUserIds();
-        if ($visibleUserIds !== null) {
-            $sheet->total_gross_amount = number_format((float) $items->sum('gross_salary'), 2, '.', '');
-            $sheet->total_net_amount = number_format((float) $items->sum('net_salary'), 2, '.', '');
-        }
+        $sheet->total_gross_amount = number_format((float) $items->sum('gross_salary'), 2, '.', '');
+        $sheet->total_net_amount = number_format((float) $items->sum('net_salary'), 2, '.', '');
         $items->each(fn (PayrollItem $item) => $item->setAttribute('available_actions', $this->itemActions($item)));
         $sheet->setRelation('items', $items);
         $sheet->setAttribute('available_actions', $this->sheetActions($sheet));
@@ -95,6 +93,7 @@ class PayrollController extends Controller
                 'calculated_at' => now(),
             ]);
             $users = User::query()->with('department')
+                ->whereDoesntHave('roles', fn (Builder $q) => $q->where('alias', 'admin'))
                 ->whereIn('employment_status', ['probation', 'active', 'transferred'])
                 ->when(! empty($data['user_ids']), fn ($q) => $q->whereIn('id', $data['user_ids']))
                 ->orderBy('id')->get();
@@ -112,7 +111,7 @@ class PayrollController extends Controller
             }
             $this->payroll->syncSheetTotals($sheet->id);
 
-            return $sheet->fresh()->load('items.user:id,name,department_id');
+            return $this->sheetResponse($sheet->fresh(), ['user:id,name,department_id']);
         });
     }
 
@@ -134,7 +133,7 @@ class PayrollController extends Controller
         $request->validate(['id' => ['required', 'exists:payroll_sheets,id']]);
         $sheet = PayrollSheet::findOrFail($request->integer('id'));
         $this->assertSheetStage($sheet, 'draft', '仅人事草稿可以删除');
-        abort_if($sheet->items()->whereIn('status', ['confirmed', 'paid'])->exists(), 422, '已有员工确认的工资表不能删除');
+        abort_if($this->payroll->sheetItems($sheet->id)->whereIn('status', ['confirmed', 'paid'])->exists(), 422, '已有员工确认的工资表不能删除');
         $sheet->delete();
 
         return ['deleted' => true];
@@ -184,7 +183,8 @@ class PayrollController extends Controller
                 ->whereHas('sheet', fn ($q) => $q->where('period_month', $sheet->period_month->toDateString()))
                 ->exists();
             abort_if($duplicate, 422, '该员工本月工资已添加，不能重复添加');
-            $user = User::with('department')->findOrFail($data['user_id']);
+            $user = User::with(['department', 'roles'])->findOrFail($data['user_id']);
+            abort_if($this->payroll->isSuperAdminUser($user), 422, '超级管理员不参与工资统计，不能添加工资明细');
             $item = PayrollItem::create(array_merge([
                 'payroll_sheet_id' => $sheet->id,
                 'user_id' => $user->id,
@@ -209,7 +209,17 @@ class PayrollController extends Controller
             $item = PayrollItem::lockForUpdate()->findOrFail($data['id']);
             $this->assertItemMutable($item);
             $this->assertSheetStage($item->sheet, 'draft', '工资已交给下一角色，当前不能修改');
-            $item->update(collect($data)->except('id')->all());
+
+            $amountValues = collect($data)
+                ->only(PayrollService::HR_FIELDS)
+                ->map(fn ($value) => round((float) $value, 2))
+                ->all();
+            $values = $amountValues;
+            if (array_key_exists('calculation_detail', $data)) {
+                $values['calculation_detail'] = $data['calculation_detail'];
+            }
+            $item->forceFill($values)->saveOrFail();
+            $this->appendCalculationDetail($item, 'hr_update', $amountValues);
             $this->payroll->recalculateItem($item);
             $this->payroll->syncSheetTotals($item->payroll_sheet_id);
 
@@ -240,9 +250,9 @@ class PayrollController extends Controller
         return DB::transaction(function () use ($request) {
             $sheet = PayrollSheet::lockForUpdate()->findOrFail($request->integer('id'));
             $this->assertSheetStage($sheet, 'draft', '当前工资表不能提交上级确认');
-            abort_unless($sheet->items()->exists(), 422, '工资表没有员工明细');
-            abort_if($sheet->items()->whereIn('status', ['confirmed', 'paid'])->exists(), 422, '存在员工已确认明细，不能重新提交');
-            $sheet->items()->update([
+            abort_unless($this->payroll->sheetItems($sheet->id)->exists(), 422, '工资表没有员工明细');
+            abort_if($this->payroll->sheetItems($sheet->id)->whereIn('status', ['confirmed', 'paid'])->exists(), 422, '存在员工已确认明细，不能重新提交');
+            $this->payroll->sheetItems($sheet->id)->update([
                 'manager_status' => 'pending', 'manager_confirmed_by' => null,
                 'manager_confirmed_at' => null, 'manager_comment' => null,
             ]);
@@ -253,7 +263,7 @@ class PayrollController extends Controller
             $this->payroll->createApprovalCycle($sheet->fresh());
             $this->payroll->logApproval($sheet, 1, '人事提交工资', 'approved', $request->input('comment'));
 
-            return $sheet->fresh()->load('items');
+            return $this->sheetResponse($sheet->fresh());
         });
     }
 
@@ -299,7 +309,7 @@ class PayrollController extends Controller
         return DB::transaction(function () use ($request) {
             $sheet = PayrollSheet::lockForUpdate()->findOrFail($request->integer('id'));
             $this->assertSheetStage($sheet, 'manager_review', '当前工资表不能提交财务复核');
-            abort_if($sheet->items()->where('manager_status', '!=', 'approved')->exists(), 422, '仍有员工工资未完成上级确认');
+            abort_if($this->payroll->sheetItems($sheet->id)->where('manager_status', '!=', 'approved')->exists(), 422, '仍有员工工资未完成上级确认');
             $sheet->update(['status' => 'finance_review', 'rejection_reason' => null]);
 
             return $sheet->fresh();
@@ -340,7 +350,7 @@ class PayrollController extends Controller
             $sheet->update(['status' => 'admin_review', 'finance_reviewed_by' => Auth::id(), 'finance_reviewed_at' => now(), 'finance_comment' => $data['comment'] ?? null, 'rejection_reason' => null]);
             $this->payroll->logApproval($sheet, 3, '财务复核', 'approved', $data['comment'] ?? null);
 
-            return $sheet->fresh()->load('items');
+            return $this->sheetResponse($sheet->fresh());
         });
     }
 
@@ -363,7 +373,7 @@ class PayrollController extends Controller
                 return $sheet->fresh();
             }
 
-            $sheet->items()->whereNotIn('status', ['confirmed', 'paid'])->update(['status' => 'pending', 'appeal_content' => null, 'appeal_result' => null]);
+            $this->payroll->sheetItems($sheet->id)->whereNotIn('status', ['confirmed', 'paid'])->update(['status' => 'pending', 'appeal_content' => null, 'appeal_result' => null]);
             $sheet->update([
                 'status' => 'employee_confirmation', 'admin_approved_by' => Auth::id(), 'admin_approved_at' => now(),
                 'admin_comment' => $data['comment'] ?? null, 'locked_by' => Auth::id(), 'locked_at' => now(), 'rejection_reason' => null,
@@ -371,7 +381,7 @@ class PayrollController extends Controller
             $this->payroll->logApproval($sheet, 4, '超级管理员终审', 'approved', $data['comment'] ?? null);
             $this->payroll->finishApproval($sheet);
 
-            return $sheet->fresh()->load('items');
+            return $this->sheetResponse($sheet->fresh());
         });
     }
 
@@ -483,17 +493,28 @@ class PayrollController extends Controller
         return DB::transaction(function () use ($request) {
             $sheet = PayrollSheet::lockForUpdate()->findOrFail($request->integer('id'));
             $this->assertSheetStage($sheet, 'completed', '仅全部员工确认完成的工资表可以标记发放');
-            abort_if($sheet->items()->where('status', '!=', 'confirmed')->exists(), 422, '仍有工资未确认或申诉未处理');
-            $sheet->items()->update(['status' => 'paid']);
+            abort_if($this->payroll->sheetItems($sheet->id)->where('status', '!=', 'confirmed')->exists(), 422, '仍有工资未确认或申诉未处理');
+            $this->payroll->sheetItems($sheet->id)->update(['status' => 'paid']);
             $sheet->update(['status' => 'paid', 'paid_by' => Auth::id(), 'paid_at' => now()]);
 
-            return $sheet->fresh()->load('items');
+            return $this->sheetResponse($sheet->fresh());
         });
     }
 
     private function scopedItem(int $id): PayrollItem
     {
         return $this->payroll->applyItemScope(PayrollItem::query())->findOrFail($id);
+    }
+
+    private function sheetResponse(PayrollSheet $sheet, array $itemRelations = []): PayrollSheet
+    {
+        $items = $this->payroll->sheetItems($sheet->id);
+        if ($itemRelations) {
+            $items->with($itemRelations);
+        }
+        $sheet->setRelation('items', $items->get());
+
+        return $sheet;
     }
 
     private function assertSheetStage(PayrollSheet $sheet, string $stage, string $message): void
@@ -535,7 +556,7 @@ class PayrollController extends Controller
 
     private function completeSheetWhenReady(PayrollSheet $sheet): void
     {
-        if (! $sheet->items()->whereIn('status', ['pending', 'appealing'])->exists()) {
+        if (! $this->payroll->sheetItems($sheet->id)->whereIn('status', ['pending', 'appealing'])->exists()) {
             $sheet->update(['status' => 'completed', 'completed_at' => now()]);
         }
     }
@@ -552,7 +573,7 @@ class PayrollController extends Controller
             $actions = ['update', 'delete', 'submit_manager_review'];
         }
         if ($sheet->status === 'manager_review' && $this->allowed('hr.payroll.hr.manage')
-            && ! $sheet->items()->where('manager_status', '!=', 'approved')->exists()) {
+            && ! $this->payroll->sheetItems($sheet->id)->where('manager_status', '!=', 'approved')->exists()) {
             $actions[] = 'submit_finance_review';
         }
         if ($sheet->status === 'finance_review' && $this->allowed('hr.payroll.finance.review')) {
