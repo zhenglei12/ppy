@@ -31,10 +31,13 @@ class SalesController extends Controller
             ->with('salesUser:id,name,department_id')->get();
 
         $customerQuery = Customer::query()->whereBetween('created_at', [$monthStart, $monthEnd]);
-        $user = auth()->user();
-        $roles = $user->roles->pluck('alias')->all();
-        if (! array_intersect($roles, ['admin', 'finance', 'sales_director', 'technical_director'])) {
-            $customerQuery->where(fn ($q) => $q->where('owner_user_id', $user->id)->orWhere('co_owner_user_id', $user->id));
+        $roles = $this->access->roles();
+        if (! $this->access->isAdmin() && ! array_intersect($roles, ['finance', 'technical_director'])) {
+            $visibleSalesUserIds = $this->access->visibleSalesUserIds();
+            $customerQuery->where(function ($query) use ($visibleSalesUserIds) {
+                $query->whereIn('owner_user_id', $visibleSalesUserIds)
+                    ->orWhereIn('co_owner_user_id', $visibleSalesUserIds);
+            });
         }
 
         return [

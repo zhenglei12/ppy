@@ -145,16 +145,27 @@ class OrderAccessService
         return Auth::user()->name === 'admin' || in_array('admin', $this->roles(), true);
     }
 
+    /**
+     * 当前登录用户在销售业务中可见的员工 ID。
+     *
+     * 销售仅能查看自己；销售主管和销售总监可查看本人、直属下属，
+     * 以及本人部门与所有下级部门中的销售人员。
+     */
+    public function visibleSalesUserIds(): array
+    {
+        return $this->salesVisibleUserIds(Auth::user(), $this->roles());
+    }
+
     private function salesVisibleUserIds(User $user, array $roles): array
     {
         if ($this->salesUserIdsCache !== null) {
             return $this->salesUserIdsCache;
         }
         if (in_array('sales_director', $roles, true)) {
-            return $this->salesUserIdsCache = $this->managedUserIds($user);
+            return $this->salesUserIdsCache = $this->managedSalesUserIds($user);
         }
         if (in_array('sales_manager', $roles, true)) {
-            return $this->salesUserIdsCache = $this->directReportTreeIds($user->id);
+            return $this->salesUserIdsCache = $this->managedSalesUserIds($user);
         }
         if (in_array('sales', $roles, true)) {
             return $this->salesUserIdsCache = [$user->id];
@@ -187,6 +198,19 @@ class OrderAccessService
         }
 
         return $ids->push($user->id)->map(fn ($id) => (int) $id)->unique()->values()->all();
+    }
+
+    private function managedSalesUserIds(User $user): array
+    {
+        $managedIds = $this->managedUserIds($user);
+        $salesIds = User::whereIn('id', $managedIds)
+            ->whereHas('roles', fn (Builder $query) => $query->whereIn('alias', [
+                'sales', 'sales_manager', 'sales_director',
+            ]))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id);
+
+        return $salesIds->push((int) $user->id)->unique()->values()->all();
     }
 
     private function directReportTreeIds(int $managerId): array
