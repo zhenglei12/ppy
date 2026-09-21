@@ -46,11 +46,10 @@ class OrderAccessService
                 $scope->{$method}(function (Builder $delivery) use ($deliveryIds) {
                     $delivery->whereIn('technical_director_id', $deliveryIds)
                         ->orWhereIn('optimizer_id', $deliveryIds)
-                        ->orWhereIn('assistant_id', $deliveryIds)
                         ->orWhereIn('owner_user_id', $deliveryIds)
                         ->orWhereHas('members', fn (Builder $member) => $member
                             ->whereIn('user_id', $deliveryIds)
-                            ->whereIn('member_role', ['technical_director', 'optimizer', 'assistant'])
+                            ->whereIn('member_role', ['technical_director', 'optimizer'])
                             ->whereNull('left_at'));
                 });
             }
@@ -131,7 +130,7 @@ class OrderAccessService
         }
         $allowed = $allowed->map(fn ($id) => (int) $id)->unique()->values()->all();
         $ids = collect($data)->only([
-            'sales_user_id', 'sales_manager_id', 'technical_director_id', 'optimizer_id', 'assistant_id', 'owner_user_id',
+            'sales_user_id', 'sales_manager_id', 'technical_director_id', 'optimizer_id', 'owner_user_id',
         ])->filter()->values()->merge(collect($data['members'] ?? [])->pluck('user_id'))->unique()->all();
         abort_if(array_diff($ids, $allowed), 403, '不能将订单分配给当前部门管理范围之外的员工');
     }
@@ -172,7 +171,7 @@ class OrderAccessService
         if (in_array('technical_director', $roles, true)) {
             return $this->deliveryUserIdsCache = $this->managedUserIds($user);
         }
-        if (array_intersect($roles, ['optimizer', 'assistant'])) {
+        if (in_array('optimizer', $roles, true)) {
             return $this->deliveryUserIdsCache = [$user->id];
         }
 

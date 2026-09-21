@@ -27,7 +27,7 @@ class OrderController extends Controller
             'customer:id,customer_no,legal_name,brand_name', 'contact:id,contact_name,mobile',
             'salesUser:id,name,department_id', 'salesManager:id,name,department_id',
             'technicalDirector:id,name,department_id', 'optimizer:id,name,department_id',
-            'assistant:id,name,department_id', 'owner:id,name,department_id',
+            'owner:id,name,department_id',
         ]);
         $this->access->applyScope($query);
 
@@ -39,7 +39,7 @@ class OrderController extends Controller
                     ->orWhereHas('customer', fn ($q) => $q->where('legal_name', 'like', "%{$keyword}%")->orWhere('brand_name', 'like', "%{$keyword}%"));
             });
         });
-        foreach (['customer_id', 'sales_user_id', 'owner_user_id'] as $field) {
+        foreach (['customer_id', 'sales_user_id', 'sales_manager_id', 'technical_director_id', 'optimizer_id', 'owner_user_id'] as $field) {
             $query->when($request->filled($field), fn ($q) => $q->where($field, $request->integer($field)));
         }
         foreach (['current_stage', 'business_status', 'health_status', 'product_type'] as $field) {
@@ -60,7 +60,7 @@ class OrderController extends Controller
     {
         $order = Order::with([
             'customer.contacts', 'contact', 'salesUser:id,name,employee_no', 'salesManager:id,name,employee_no',
-            'technicalDirector:id,name,employee_no', 'optimizer:id,name,employee_no', 'assistant:id,name,employee_no',
+            'technicalDirector:id,name,employee_no', 'optimizer:id,name,employee_no',
             'owner:id,name,employee_no', 'members.user:id,name,employee_no,department_id,position_name', 'stageLogs' => fn ($q) => $q->latest('operated_at'),
             'contracts', 'paymentPlans', 'payments', 'deliveryProject.milestones',
         ])->findOrFail($request->integer('id'));
@@ -104,7 +104,7 @@ class OrderController extends Controller
         $data = $this->validateOrder($request, $order->id, true);
         $this->validateContactCustomer(array_merge($order->only(['customer_id', 'contact_id']), $data));
         $assignmentChanges = collect($data)->only([
-            'sales_user_id', 'sales_manager_id', 'technical_director_id', 'optimizer_id', 'assistant_id', 'owner_user_id',
+            'sales_user_id', 'sales_manager_id', 'technical_director_id', 'optimizer_id', 'owner_user_id',
         ])->all();
         if ($request->has('members')) {
             $assignmentChanges['members'] = $request->input('members', []);
@@ -185,11 +185,10 @@ class OrderController extends Controller
             'sales_manager_id' => ['nullable', 'exists:users,id'],
             'technical_director_id' => ['nullable', 'exists:users,id'],
             'optimizer_id' => ['nullable', 'exists:users,id'],
-            'assistant_id' => ['nullable', 'exists:users,id'],
             'owner_user_id' => ['nullable', 'exists:users,id'],
             'members' => ['sometimes', 'array'],
             'members.*.user_id' => ['required', 'exists:users,id'],
-            'members.*.member_role' => ['required', Rule::in(['sales', 'sales_manager', 'technical_director', 'optimizer', 'assistant'])],
+            'members.*.member_role' => ['required', Rule::in(['sales', 'sales_manager', 'technical_director', 'optimizer'])],
             'members.*.commission_ratio' => ['nullable', 'numeric', 'between:0,1'],
         ]);
         $order = Order::findOrFail($request->integer('id'));
@@ -204,13 +203,14 @@ class OrderController extends Controller
                 $this->syncMembers($order, $request->input('members'));
             }
 
-            return $this->withActions($order->fresh()->load(['members.user:id,name', 'technicalDirector:id,name', 'optimizer:id,name', 'assistant:id,name', 'owner:id,name']));
+            return $this->withActions($order->fresh()->load(['members.user:id,name', 'technicalDirector:id,name', 'optimizer:id,name', 'owner:id,name']));
         });
     }
 
     private function validateOrder(Request $request, ?int $id = null, bool $partial = false): array
     {
         $required = $partial ? 'sometimes' : 'required';
+        $requiredFiles = $partial ? 'sometimes' : 'required';
 
         return $request->validate([
             'order_no' => ['sometimes', 'nullable', 'max:64', Rule::unique('order', 'order_no')->ignore($id)],
@@ -218,14 +218,23 @@ class OrderController extends Controller
             'contact_id' => ['nullable', 'exists:crm_contacts,id'],
             'product_type' => [$required, Rule::in(['trial', 'annual', 'other'])],
             'product_name' => [$required, 'string', 'max:255'],
+            'contract_no' => ['nullable', 'string', 'max:64', Rule::unique('order', 'contract_no')->ignore($id)],
             'contract_amount' => [$required, 'numeric', 'min:0'],
             'discount_amount' => ['sometimes', 'numeric', 'min:0'],
             'payment_terms' => [$required, 'string', 'max:1000'],
+            'payment_method' => ['nullable', Rule::in(['bank', 'wechat', 'alipay', 'cash', 'other'])],
+            'payment_subject' => ['nullable', 'string', 'max:255'],
+            'payment_due_date' => ['nullable', 'date'],
+            'company_account' => ['nullable', 'string', 'max:255'],
+            'invoice_required' => ['sometimes', 'boolean'],
+            'invoice_type' => ['nullable', Rule::in(['normal', 'special', 'electronic'])],
+            'invoice_title' => ['nullable', 'string', 'max:255'],
+            'invoice_tax_no' => ['nullable', 'string', 'max:64'],
+            'invoice_status' => ['sometimes', Rule::in(['not_applied', 'applied', 'issued'])],
             'sales_user_id' => ['sometimes', 'exists:users,id'],
             'sales_manager_id' => ['nullable', 'exists:users,id'],
             'technical_director_id' => ['nullable', 'exists:users,id'],
             'optimizer_id' => ['nullable', 'exists:users,id'],
-            'assistant_id' => ['nullable', 'exists:users,id'],
             'owner_user_id' => ['sometimes', 'exists:users,id'],
             'health_status' => ['sometimes', Rule::in(['green', 'yellow', 'red'])],
             'next_action' => ['nullable', 'string', 'max:500'],
@@ -238,9 +247,37 @@ class OrderController extends Controller
             'primary_business' => ['nullable', 'string', 'max:255'],
             'target_region' => ['nullable', 'string', 'max:255'],
             'service_objective' => ['nullable', 'string'],
+            'success_criteria' => ['nullable', 'string'],
+            'baseline_data' => ['nullable', 'array'],
+            'required_materials' => ['nullable', 'array'],
+            'materials_due_date' => ['nullable', 'date'],
+            'kickoff_meeting_at' => ['nullable', 'date'],
+            'kickoff_attendees' => ['nullable', 'array'],
             'sales_commitment' => ['nullable', 'string'],
+            'ranking_commitment' => ['sometimes', 'boolean'],
+            'acquisition_commitment' => ['sometimes', 'boolean'],
+            'qualification_status' => ['sometimes', Rule::in(['pending', 'verified', 'missing'])],
+            'case_authorized' => ['sometimes', 'boolean'],
+            'logo_authorized' => ['sometimes', 'boolean'],
+            'portrait_authorized' => ['sometimes', 'boolean'],
+            'refund_terms' => ['nullable', 'string'],
+            'special_delivery_terms' => ['nullable', 'string'],
+            'complaint_history' => ['nullable', 'string'],
+            'pending_verification' => ['nullable', 'string'],
             'risk_summary' => ['nullable', 'string'],
             'members' => ['sometimes', 'array'],
+            'contract_files' => [$requiredFiles, 'array', 'min:1'],
+            'contract_files.*' => ['url', 'max:1000'],
+            'payment_voucher_files' => [$requiredFiles, 'array', 'min:1'],
+            'payment_voucher_files.*' => ['url', 'max:1000'],
+            'license_files' => [$requiredFiles, 'array', 'min:1'],
+            'license_files.*' => ['url', 'max:1000'],
+            'authorization_files' => [$requiredFiles, 'array', 'min:1'],
+            'authorization_files.*' => ['url', 'max:1000'],
+            'sales_handover_files' => [$requiredFiles, 'array', 'min:1'],
+            'sales_handover_files.*' => ['url', 'max:1000'],
+            'approval_files' => ['sometimes', 'array'],
+            'approval_files.*' => ['url', 'max:1000'],
         ]);
     }
 

@@ -24,8 +24,11 @@ class DeliveryController extends Controller
         return [
             'pending_assign_count' => $global ? Order::where('current_stage', 'tech_assign')->count() : 0,
             'active_project_count' => DeliveryProject::whereIn('id', $projectIds)->where('status', 'active')->count(),
+            'completed_project_count' => DeliveryProject::whereIn('id', $projectIds)->where('status', 'completed')->count(),
             'overdue_task_count' => DeliveryTask::whereIn('project_id', $projectIds)->whereNotIn('status', ['completed', 'cancelled'])->where('due_at', '<', now())->count(),
             'risk_distribution' => DeliveryProject::whereIn('id', $projectIds)->select('health_status', DB::raw('count(*) as total'))->groupBy('health_status')->pluck('total', 'health_status'),
+            'node_distribution' => DeliveryProject::whereIn('id', $projectIds)->select('current_node', DB::raw('count(*) as total'))->groupBy('current_node')->pluck('total', 'current_node'),
+            'task_status_distribution' => DeliveryTask::whereIn('project_id', $projectIds)->select('status', DB::raw('count(*) as total'))->groupBy('status')->pluck('total', 'status'),
             'workload' => DeliveryTask::whereIn('project_id', $projectIds)->select('assignee_id', DB::raw('count(*) as total'))->whereNotIn('status', ['completed', 'cancelled'])->groupBy('assignee_id')->orderByDesc('total')->limit(20)->get(),
         ];
     }
@@ -53,7 +56,7 @@ class DeliveryController extends Controller
     {
         $data = $request->validate([
             'order_id' => ['required', 'exists:order,id', 'unique:delivery_projects,order_id'],
-            'technical_director_id' => ['nullable', 'exists:users,id'], 'optimizer_id' => ['nullable', 'exists:users,id'], 'assistant_id' => ['nullable', 'exists:users,id'],
+            'technical_director_id' => ['nullable', 'exists:users,id'], 'optimizer_id' => ['nullable', 'exists:users,id'],
             'planned_start_date' => ['nullable', 'date'], 'planned_end_date' => ['nullable', 'date', 'after_or_equal:planned_start_date'],
             'success_criteria' => ['nullable', 'string'], 'baseline_data' => ['nullable', 'array'], 'key_keywords' => ['nullable', 'array'],
             'risk_summary' => ['nullable', 'string'], 'renewal_warning_at' => ['nullable', 'date'],
@@ -74,18 +77,18 @@ class DeliveryController extends Controller
         $project = DeliveryProject::findOrFail($request->integer('id'));
         $this->authorizeProject($project);
         $data = $request->validate([
-            'technical_director_id' => ['sometimes', 'nullable', 'exists:users,id'], 'optimizer_id' => ['sometimes', 'nullable', 'exists:users,id'], 'assistant_id' => ['sometimes', 'nullable', 'exists:users,id'],
+            'technical_director_id' => ['sometimes', 'nullable', 'exists:users,id'], 'optimizer_id' => ['sometimes', 'nullable', 'exists:users,id'],
             'planned_start_date' => ['sometimes', 'nullable', 'date'], 'actual_start_date' => ['sometimes', 'nullable', 'date'], 'planned_end_date' => ['sometimes', 'nullable', 'date'], 'actual_end_date' => ['sometimes', 'nullable', 'date'],
             'current_node' => ['sometimes', Rule::in(['D1', 'D3', 'D7', 'D15', 'D30', 'D60', 'D90'])], 'status' => ['sometimes', Rule::in(['pending', 'active', 'paused', 'completed', 'terminated'])],
             'health_status' => ['sometimes', Rule::in(['green', 'yellow', 'red'])], 'success_criteria' => ['sometimes', 'nullable', 'string'],
             'baseline_data' => ['sometimes', 'nullable', 'array'], 'key_keywords' => ['sometimes', 'nullable', 'array'], 'risk_summary' => ['sometimes', 'nullable', 'string'], 'renewal_warning_at' => ['sometimes', 'nullable', 'date'],
         ]);
-        if (array_intersect(array_keys($data), ['technical_director_id', 'optimizer_id', 'assistant_id'])) {
+        if (array_intersect(array_keys($data), ['technical_director_id', 'optimizer_id'])) {
             abort_unless($this->hasAnyRole(['admin', 'technical_director']), 403, '仅技术总监可以调整项目成员');
         }
         $project->update($data);
-        if (array_key_exists('optimizer_id', $data) || array_key_exists('assistant_id', $data) || array_key_exists('technical_director_id', $data)) {
-            $project->order()->update(collect($data)->only(['optimizer_id', 'assistant_id', 'technical_director_id'])->all());
+        if (array_key_exists('optimizer_id', $data) || array_key_exists('technical_director_id', $data)) {
+            $project->order()->update(collect($data)->only(['optimizer_id', 'technical_director_id'])->all());
         }
 
         return $project->fresh()->load('order.customer', 'milestones');
@@ -118,7 +121,7 @@ class DeliveryController extends Controller
         $user = Auth::user();
         $roles = $user->roles->pluck('alias')->all();
         if (! array_intersect($roles, ['admin', 'technical_director', 'sales_director', 'finance'])) {
-            $query->whereHas('project', fn ($project) => $project->where('optimizer_id', $user->id)->orWhere('assistant_id', $user->id)->orWhere('technical_director_id', $user->id)->orWhereHas('order', fn ($order) => $order->where('sales_user_id', $user->id)));
+            $query->whereHas('project', fn ($project) => $project->where('optimizer_id', $user->id)->orWhere('technical_director_id', $user->id)->orWhereHas('order', fn ($order) => $order->where('sales_user_id', $user->id)));
         }
 
         return $query->when($request->filled('project_id'), fn ($q) => $q->where('project_id', $request->integer('project_id')))
@@ -219,7 +222,7 @@ class DeliveryController extends Controller
         if (array_intersect($roles, ['admin', 'technical_director', 'sales_director', 'finance'])) {
             return;
         }
-        $query->where(fn ($q) => $q->where('optimizer_id', $user->id)->orWhere('assistant_id', $user->id)->orWhere('technical_director_id', $user->id)->orWhereHas('order', fn ($o) => $o->where('sales_user_id', $user->id)));
+        $query->where(fn ($q) => $q->where('optimizer_id', $user->id)->orWhere('technical_director_id', $user->id)->orWhereHas('order', fn ($o) => $o->where('sales_user_id', $user->id)));
     }
 
     private function visibleProjectIds()

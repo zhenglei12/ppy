@@ -28,8 +28,16 @@ class FinanceController extends Controller
             'pending_count' => Payment::whereIn('order_id', $orderIds)->where('confirmation_status', 'pending')->count(),
             'receivable_amount' => Order::whereIn('id', $orderIds)->whereNotIn('business_status', ['cancelled'])->sum('receivable_amount'),
             'overdue_plan_amount' => PaymentPlan::whereIn('order_id', $orderIds)->whereIn('status', ['pending', 'partial', 'overdue'])->whereDate('due_date', '<', today())->sum(DB::raw('planned_amount - paid_amount')),
+            'overdue_plan_count' => PaymentPlan::whereIn('order_id', $orderIds)->whereIn('status', ['pending', 'partial', 'overdue'])->whereDate('due_date', '<', today())->count(),
+            'invoice_pending_count' => Invoice::whereIn('order_id', $orderIds)->whereIn('status', ['requested', 'reviewing'])->count(),
             'refunded_amount' => Refund::whereIn('order_id', $orderIds)->where('status', 'refunded')->sum('refund_amount'),
             'refund_count' => Refund::whereIn('order_id', $orderIds)->where('status', 'refunded')->count(),
+            'payment_status_distribution' => Payment::whereIn('order_id', $orderIds)->select('confirmation_status', DB::raw('count(*) as total'))->groupBy('confirmation_status')->pluck('total', 'confirmation_status'),
+            'receivable_aging' => [
+                '0_30_days' => PaymentPlan::whereIn('order_id', $orderIds)->whereIn('status', ['pending', 'partial', 'overdue'])->whereBetween('due_date', [today()->subDays(30), today()])->sum(DB::raw('planned_amount - paid_amount')),
+                '31_60_days' => PaymentPlan::whereIn('order_id', $orderIds)->whereIn('status', ['pending', 'partial', 'overdue'])->whereBetween('due_date', [today()->subDays(60), today()->subDays(31)])->sum(DB::raw('planned_amount - paid_amount')),
+                'over_60_days' => PaymentPlan::whereIn('order_id', $orderIds)->whereIn('status', ['pending', 'partial', 'overdue'])->where('due_date', '<', today()->subDays(60))->sum(DB::raw('planned_amount - paid_amount')),
+            ],
         ];
     }
 
@@ -238,7 +246,7 @@ class FinanceController extends Controller
                 $teamIds = \App\Http\Model\User::where('direct_manager_id', $user->id)->pluck('id')->push($user->id);
                 $query->whereIn('sales_user_id', $teamIds);
             } else {
-                $query->where(fn($q) => $q->where('sales_user_id', $user->id)->orWhere('technical_director_id', $user->id)->orWhere('optimizer_id', $user->id)->orWhere('assistant_id', $user->id));
+                $query->where(fn($q) => $q->where('sales_user_id', $user->id)->orWhere('technical_director_id', $user->id)->orWhere('optimizer_id', $user->id));
             }
         }
 
