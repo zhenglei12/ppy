@@ -45,7 +45,7 @@ Route::group(['namespace' => 'Admin', 'middleware' => ['cross', 'auth:sanctum', 
         Route::post('customers/update', 'Business\\CustomerController@update')->name('business.customers.update')->defaults('permission', 'sales.customer.manage');
         Route::post('customers/delete', 'Business\\CustomerController@destroy')->name('business.customers.delete')->defaults('permission', 'sales.customer.manage');
         Route::get('sales/dashboard', 'Business\\SalesController@dashboard')->name('business.sales.dashboard')->defaults('permission', 'sales.order.view');
-        Route::get('overview/dashboard', 'Business\\OverviewController@dashboard')->name('business.overview.dashboard')->defaults('permission', 'sales.order.view');
+        Route::get('overview/dashboard', 'Business\\OverviewController@dashboard')->name('business.overview.dashboard')->defaults('permission', 'dashboard.view');
 
         Route::post('orders/list', 'Business\\OrderController@index')->name('business.orders.list')->defaults('permission', 'sales.order.view');
         Route::get('orders/detail', 'Business\\OrderController@show')->name('business.orders.detail')->defaults('permission', 'sales.order.view');
