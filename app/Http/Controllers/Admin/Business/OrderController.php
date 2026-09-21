@@ -6,7 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Model\Order;
 use App\Http\Model\OrderMember;
 use App\Http\Model\OrderStageLog;
-use App\Http\Model\User;
+use App\Http\Services\OrderAccessService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -17,10 +17,19 @@ class OrderController extends Controller
 {
     private const STAGES = ['draft', 'sales_review', 'finance_confirm', 'tech_assign', 'service', 'renewal', 'completed', 'cancelled'];
 
+    public function __construct(private OrderAccessService $access)
+    {
+    }
+
     public function index(Request $request)
     {
-        $query = Order::query()->with(['customer:id,customer_no,legal_name,brand_name', 'contact:id,contact_name,mobile', 'salesUser:id,name', 'owner:id,name']);
-        $this->applyDataScope($query);
+        $query = Order::query()->with([
+            'customer:id,customer_no,legal_name,brand_name', 'contact:id,contact_name,mobile',
+            'salesUser:id,name,department_id', 'salesManager:id,name,department_id',
+            'technicalDirector:id,name,department_id', 'optimizer:id,name,department_id',
+            'assistant:id,name,department_id', 'owner:id,name,department_id',
+        ]);
+        $this->access->applyScope($query);
 
         $query->when($request->filled('keyword'), function ($query) use ($request) {
             $keyword = $request->input('keyword');
@@ -41,7 +50,10 @@ class OrderController extends Controller
             ->when($request->filled('created_start'), fn ($q) => $q->whereDate('created_at', '>=', $request->input('created_start')))
             ->when($request->filled('created_end'), fn ($q) => $q->whereDate('created_at', '<=', $request->input('created_end')));
 
-        return $query->latest('id')->paginate($request->integer('pageSize', 20));
+        $result = $query->latest('id')->paginate($request->integer('pageSize', 20));
+        $result->getCollection()->each(fn (Order $order) => $order->setAttribute('available_actions', $this->availableActions($order)));
+
+        return $result;
     }
 
     public function show(Request $request)
@@ -49,10 +61,11 @@ class OrderController extends Controller
         $order = Order::with([
             'customer.contacts', 'contact', 'salesUser:id,name,employee_no', 'salesManager:id,name,employee_no',
             'technicalDirector:id,name,employee_no', 'optimizer:id,name,employee_no', 'assistant:id,name,employee_no',
-            'owner:id,name,employee_no', 'members', 'stageLogs' => fn ($q) => $q->latest('operated_at'),
+            'owner:id,name,employee_no', 'members.user:id,name,employee_no,department_id,position_name', 'stageLogs' => fn ($q) => $q->latest('operated_at'),
             'contracts', 'paymentPlans', 'payments', 'deliveryProject.milestones',
         ])->findOrFail($request->integer('id'));
-        $this->authorizeOrder($order);
+        $this->access->authorizeView($order);
+        $order->setAttribute('available_actions', $this->availableActions($order));
 
         return $order;
     }
@@ -61,6 +74,11 @@ class OrderController extends Controller
     {
         $data = $this->validateOrder($request);
         $this->validateContactCustomer($data);
+        $candidate = $data;
+        $candidate['sales_user_id'] = $candidate['sales_user_id'] ?? Auth::id();
+        $candidate['owner_user_id'] = $candidate['owner_user_id'] ?? $candidate['sales_user_id'];
+        $candidate['members'] = $request->input('members', []);
+        $this->access->assertAssignableUsers($candidate);
 
         return DB::transaction(function () use ($request, $data) {
             $data = $this->normalizeAmounts($data);
@@ -74,17 +92,24 @@ class OrderController extends Controller
             $this->syncMembers($order, $request->input('members', []));
             $this->logStage($order, null, $order->current_stage);
 
-            return $order->load(['customer', 'contact', 'members', 'owner:id,name']);
+            return $this->withActions($order->load(['customer', 'contact', 'members.user:id,name', 'owner:id,name']));
         });
     }
 
     public function update(Request $request)
     {
         $order = Order::findOrFail($request->integer('id'));
-        $this->authorizeOrder($order);
-        abort_unless(in_array($order->current_stage, ['draft', 'sales_review'], true), 422, '当前阶段不允许直接修改订单');
+        $this->access->authorizeView($order);
+        abort_unless($this->access->canEdit($order), 403, '当前用户或订单阶段不允许修改');
         $data = $this->validateOrder($request, $order->id, true);
         $this->validateContactCustomer(array_merge($order->only(['customer_id', 'contact_id']), $data));
+        $assignmentChanges = collect($data)->only([
+            'sales_user_id', 'sales_manager_id', 'technical_director_id', 'optimizer_id', 'assistant_id', 'owner_user_id',
+        ])->all();
+        if ($request->has('members')) {
+            $assignmentChanges['members'] = $request->input('members', []);
+        }
+        $this->access->assertAssignableUsers($assignmentChanges);
 
         return DB::transaction(function () use ($request, $order, $data) {
             $order->update($this->normalizeAmounts(array_merge($order->only(['contract_amount', 'discount_amount', 'paid_amount']), $data)));
@@ -92,15 +117,15 @@ class OrderController extends Controller
                 $this->syncMembers($order, $request->input('members', []));
             }
 
-            return $order->fresh()->load(['customer', 'contact', 'members', 'owner:id,name']);
+            return $this->withActions($order->fresh()->load(['customer', 'contact', 'members.user:id,name', 'owner:id,name']));
         });
     }
 
     public function destroy(Request $request)
     {
         $order = Order::findOrFail($request->integer('id'));
-        $this->authorizeOrder($order);
-        abort_unless($order->current_stage === 'draft', 422, '仅草稿订单可以删除');
+        $this->access->authorizeView($order);
+        abort_unless($this->access->canDelete($order), 403, '仅草稿订单的创建人或其管理上级可以删除');
         $order->delete();
 
         return ['deleted' => true];
@@ -117,9 +142,12 @@ class OrderController extends Controller
             'evidence_note' => ['nullable', 'string'],
         ]);
         $order = Order::findOrFail($request->integer('id'));
-        $this->authorizeOrder($order);
+        $this->access->authorizeView($order);
         $this->assertTransition($order->current_stage, $request->input('to_stage'));
         $this->authorizeTransition($order->current_stage, $request->input('to_stage'));
+        if ($request->integer('owner_user_id') !== $order->owner_user_id) {
+            $this->access->assertAssignableUsers(['owner_user_id' => $request->integer('owner_user_id')]);
+        }
 
         return DB::transaction(function () use ($request, $order) {
             $from = $order->current_stage;
@@ -146,7 +174,7 @@ class OrderController extends Controller
             $order->update($values);
             $this->logStage($order, $from, $to, $request->input('evidence_note'));
 
-            return $order->fresh()->load(['owner:id,name', 'stageLogs' => fn ($q) => $q->latest('operated_at')]);
+            return $this->withActions($order->fresh()->load(['owner:id,name', 'stageLogs' => fn ($q) => $q->latest('operated_at')]));
         });
     }
 
@@ -165,7 +193,9 @@ class OrderController extends Controller
             'members.*.commission_ratio' => ['nullable', 'numeric', 'between:0,1'],
         ]);
         $order = Order::findOrFail($request->integer('id'));
-        $this->authorizeOrder($order);
+        $this->access->authorizeView($order);
+        abort_unless($this->access->canAssign($order), 403, '当前角色或订单阶段不允许分配成员');
+        $this->access->assertAssignableUsers($data);
         unset($data['id'], $data['members']);
 
         return DB::transaction(function () use ($request, $order, $data) {
@@ -174,7 +204,7 @@ class OrderController extends Controller
                 $this->syncMembers($order, $request->input('members'));
             }
 
-            return $order->fresh()->load(['members', 'technicalDirector:id,name', 'optimizer:id,name', 'assistant:id,name', 'owner:id,name']);
+            return $this->withActions($order->fresh()->load(['members.user:id,name', 'technicalDirector:id,name', 'optimizer:id,name', 'assistant:id,name', 'owner:id,name']));
         });
     }
 
@@ -242,6 +272,7 @@ class OrderController extends Controller
 
     private function syncMembers(Order $order, array $members): void
     {
+        $order->members()->whereNull('left_at')->update(['left_at' => now()]);
         foreach ($members as $member) {
             OrderMember::updateOrCreate(
                 ['order_id' => $order->id, 'user_id' => $member['user_id'], 'member_role' => $member['member_role']],
@@ -290,31 +321,45 @@ class OrderController extends Controller
         abort_unless(array_intersect($roles, $allowedRoles), 403, '当前角色无权执行该阶段流转');
     }
 
-    private function applyDataScope($query): void
+    private function availableActions(Order $order): array
     {
-        $user = Auth::user();
-        $roles = $user->roles->pluck('alias')->all();
-        if (array_intersect($roles, ['admin', 'sales_director', 'technical_director', 'finance'])) {
-            return;
+        $actions = ['view'];
+        $roles = $this->access->roles();
+        if ($this->access->canEdit($order)) {
+            $actions[] = 'update';
         }
-        if (in_array('sales_manager', $roles, true)) {
-            $ids = User::where('direct_manager_id', $user->id)->pluck('id')->push($user->id);
-            $query->whereIn('sales_user_id', $ids);
+        if ($this->access->canDelete($order)) {
+            $actions[] = 'delete';
+        }
+        if ($this->access->canAssign($order)) {
+            $actions[] = 'assign';
+        }
+        if ($order->current_stage === 'draft' && ($this->access->isAdmin() || array_intersect($roles, ['sales', 'sales_manager', 'sales_director']))) {
+            $actions[] = 'submit_sales_review';
+        }
+        if ($order->current_stage === 'sales_review' && ($this->access->isAdmin() || array_intersect($roles, ['sales_manager', 'sales_director']))) {
+            $actions[] = 'approve_sales';
+            $actions[] = 'return_draft';
+        }
+        if ($order->current_stage === 'finance_confirm' && ($this->access->isAdmin() || in_array('finance', $roles, true))) {
+            $actions[] = 'confirm_finance';
+        }
+        if ($order->current_stage === 'tech_assign' && ($this->access->isAdmin() || in_array('technical_director', $roles, true))) {
+            $actions[] = 'start_service';
+        }
+        if (in_array($order->current_stage, ['service', 'renewal'], true)
+            && ($this->access->isAdmin() || array_intersect($roles, ['technical_director', 'optimizer']))) {
+            $actions[] = 'complete';
+        }
 
-            return;
-        }
-        $query->where(function ($q) use ($user) {
-            $q->whereIn('sales_user_id', [$user->id])->orWhere('owner_user_id', $user->id)
-                ->orWhere('optimizer_id', $user->id)->orWhere('assistant_id', $user->id)
-                ->orWhereHas('members', fn ($member) => $member->where('user_id', $user->id)->whereNull('left_at'));
-        });
+        return array_values(array_unique($actions));
     }
 
-    private function authorizeOrder(Order $order): void
+    private function withActions(Order $order): Order
     {
-        $query = Order::whereKey($order->id);
-        $this->applyDataScope($query);
-        abort_unless($query->exists(), 403, '无权访问该订单');
+        $order->setAttribute('available_actions', $this->availableActions($order));
+
+        return $order;
     }
 
     private function number(string $prefix): string
