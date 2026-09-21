@@ -43,7 +43,7 @@ class FinanceController extends Controller
 
     public function plans(Request $request)
     {
-        return PaymentPlan::with(['order:id,order_no,customer_id,product_name,payable_amount', 'order.customer:id,legal_name,brand_name'])->whereIn('order_id', $this->visibleOrderIds())
+        return PaymentPlan::with(['order:id,order_no,customer_id,customer_legal_name,payable_amount', 'order.customer:id,legal_name,brand_name'])->whereIn('order_id', $this->visibleOrderIds())
             ->when($request->filled('order_id'), fn($q) => $q->where('order_id', $request->integer('order_id')))
             ->when($request->filled('status'), fn($q) => $q->where('status', $request->input('status')))
             ->when($request->boolean('overdue'), fn($q) => $q->whereDate('due_date', '<', today())->whereIn('status', ['pending', 'partial', 'overdue']))
@@ -76,7 +76,7 @@ class FinanceController extends Controller
 
     public function payments(Request $request)
     {
-        return Payment::with(['order:id,order_no,customer_id,product_name,payable_amount,paid_amount,receivable_amount', 'order.customer:id,legal_name,brand_name', 'plan'])->whereIn('order_id', $this->visibleOrderIds())
+        return Payment::with(['order:id,order_no,customer_id,customer_legal_name,payable_amount,paid_amount,receivable_amount', 'order.customer:id,legal_name,brand_name', 'plan'])->whereIn('order_id', $this->visibleOrderIds())
             ->when($request->filled('order_id'), fn($q) => $q->where('order_id', $request->integer('order_id')))
             ->when($request->filled('confirmation_status'), fn($q) => $q->where('confirmation_status', $request->input('confirmation_status')))
             ->when($request->filled('paid_start'), fn($q) => $q->where('paid_at', '>=', $request->input('paid_start')))

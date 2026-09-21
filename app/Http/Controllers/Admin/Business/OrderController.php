@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin\Business;
 
 use App\Http\Controllers\Controller;
 use App\Http\Model\Order;
+use App\Http\Model\Customer;
 use App\Http\Model\OrderMember;
 use App\Http\Model\OrderStageLog;
 use App\Http\Services\OrderAccessService;
@@ -35,7 +36,7 @@ class OrderController extends Controller
             $keyword = $request->input('keyword');
             $query->where(function ($query) use ($keyword) {
                 $query->where('order_no', 'like', "%{$keyword}%")
-                    ->orWhere('product_name', 'like', "%{$keyword}%")
+                    ->orWhere('customer_legal_name', 'like', "%{$keyword}%")
                     ->orWhereHas('customer', fn ($q) => $q->where('legal_name', 'like', "%{$keyword}%")->orWhere('brand_name', 'like', "%{$keyword}%"));
             });
         });
@@ -72,7 +73,9 @@ class OrderController extends Controller
 
     public function store(Request $request)
     {
+        $this->resolveCustomerInput($request);
         $data = $this->validateOrder($request);
+        unset($data['customer_name'], $data['contact_name']);
         $this->validateContactCustomer($data);
         $candidate = $data;
         $candidate['sales_user_id'] = $candidate['sales_user_id'] ?? Auth::id();
@@ -101,7 +104,9 @@ class OrderController extends Controller
         $order = Order::findOrFail($request->integer('id'));
         $this->access->authorizeView($order);
         abort_unless($this->access->canEdit($order), 403, '当前用户或订单阶段不允许修改');
+        $this->resolveCustomerInput($request, $order);
         $data = $this->validateOrder($request, $order->id, true);
+        unset($data['customer_name'], $data['contact_name']);
         $this->validateContactCustomer(array_merge($order->only(['customer_id', 'contact_id']), $data));
         $assignmentChanges = collect($data)->only([
             'sales_user_id', 'sales_manager_id', 'technical_director_id', 'optimizer_id', 'owner_user_id',
@@ -112,7 +117,7 @@ class OrderController extends Controller
         $this->access->assertAssignableUsers($assignmentChanges);
 
         return DB::transaction(function () use ($request, $order, $data) {
-            $order->update($this->normalizeAmounts(array_merge($order->only(['contract_amount', 'discount_amount', 'paid_amount']), $data)));
+            $order->update($this->normalizeAmounts(array_merge($order->only(['contract_amount', 'paid_amount']), $data)));
             if ($request->has('members')) {
                 $this->syncMembers($order, $request->input('members', []));
             }
@@ -216,12 +221,16 @@ class OrderController extends Controller
             'order_no' => ['sometimes', 'nullable', 'max:64', Rule::unique('order', 'order_no')->ignore($id)],
             'customer_id' => [$required, 'exists:crm_customers,id'],
             'contact_id' => ['nullable', 'exists:crm_contacts,id'],
+            'customer_name' => [$partial ? 'sometimes' : 'required', 'string', 'max:255'],
+            'contact_name' => [$partial ? 'sometimes' : 'required', 'string', 'max:64'],
+            'customer_legal_name' => [$required, 'string', 'max:255'],
+            'customer_credit_code' => ['nullable', 'string', 'max:32'],
+            'customer_mobile' => ['nullable', 'string', 'max:32'],
+            'customer_wechat' => ['nullable', 'string', 'max:64'],
+            'customer_industry' => ['nullable', 'string', 'max:128'],
             'product_type' => [$required, Rule::in(['trial', 'annual', 'other'])],
-            'product_name' => [$required, 'string', 'max:255'],
             'contract_no' => ['nullable', 'string', 'max:64', Rule::unique('order', 'contract_no')->ignore($id)],
             'contract_amount' => [$required, 'numeric', 'min:0'],
-            'discount_amount' => ['sometimes', 'numeric', 'min:0'],
-            'payment_terms' => [$required, 'string', 'max:1000'],
             'payment_method' => ['nullable', Rule::in(['bank', 'wechat', 'alipay', 'cash', 'other'])],
             'payment_subject' => ['nullable', 'string', 'max:255'],
             'payment_due_date' => ['nullable', 'date'],
@@ -246,13 +255,7 @@ class OrderController extends Controller
             'customer_owner_name' => ['nullable', 'string', 'max:100'],
             'primary_business' => ['nullable', 'string', 'max:255'],
             'target_region' => ['nullable', 'string', 'max:255'],
-            'service_objective' => ['nullable', 'string'],
-            'success_criteria' => ['nullable', 'string'],
-            'baseline_data' => ['nullable', 'array'],
-            'required_materials' => ['nullable', 'array'],
-            'materials_due_date' => ['nullable', 'date'],
             'kickoff_meeting_at' => ['nullable', 'date'],
-            'kickoff_attendees' => ['nullable', 'array'],
             'sales_commitment' => ['nullable', 'string'],
             'ranking_commitment' => ['sometimes', 'boolean'],
             'acquisition_commitment' => ['sometimes', 'boolean'],
@@ -260,11 +263,7 @@ class OrderController extends Controller
             'case_authorized' => ['sometimes', 'boolean'],
             'logo_authorized' => ['sometimes', 'boolean'],
             'portrait_authorized' => ['sometimes', 'boolean'],
-            'refund_terms' => ['nullable', 'string'],
-            'special_delivery_terms' => ['nullable', 'string'],
             'complaint_history' => ['nullable', 'string'],
-            'pending_verification' => ['nullable', 'string'],
-            'risk_summary' => ['nullable', 'string'],
             'members' => ['sometimes', 'array'],
             'contract_files' => [$requiredFiles, 'array', 'min:1'],
             'contract_files.*' => ['url', 'max:1000'],
@@ -283,11 +282,9 @@ class OrderController extends Controller
 
     private function normalizeAmounts(array $data): array
     {
-        if (array_key_exists('contract_amount', $data) || array_key_exists('discount_amount', $data)) {
+        if (array_key_exists('contract_amount', $data)) {
             $contract = (float) ($data['contract_amount'] ?? 0);
-            $discount = (float) ($data['discount_amount'] ?? 0);
-            abort_if($discount > $contract, 422, '折扣金额不能大于合同金额');
-            $data['payable_amount'] = round($contract - $discount, 2);
+            $data['payable_amount'] = round($contract, 2);
             $paid = (float) ($data['paid_amount'] ?? 0);
             abort_if($paid > $data['payable_amount'], 422, '已付金额不能大于应付金额');
             $data['receivable_amount'] = round($data['payable_amount'] - $paid, 2);
@@ -304,6 +301,38 @@ class OrderController extends Controller
                 422,
                 '联系人不属于所选客户'
             );
+        }
+    }
+
+    /** 将前端直接输入的客户主体和联系人落到客户档案，订单仍保存标准外键。 */
+    private function resolveCustomerInput(Request $request, ?Order $order = null): void
+    {
+        $customerName = trim((string) $request->input('customer_name', ''));
+        $contactName = trim((string) $request->input('contact_name', ''));
+        if ($customerName === '') {
+            return;
+        }
+
+        $customer = Customer::where('legal_name', $customerName)->first();
+        if (! $customer) {
+            $customer = Customer::create([
+                'customer_no' => $this->number('CUS'),
+                'legal_name' => $customerName,
+                'owner_user_id' => Auth::id(),
+                'status' => 'lead',
+            ]);
+        }
+        $request->merge(['customer_id' => $customer->id]);
+        if (! $request->filled('customer_legal_name')) {
+            $request->merge(['customer_legal_name' => $customerName]);
+        }
+
+        if ($contactName !== '') {
+            $contact = $customer->contacts()->where('contact_name', $contactName)->first();
+            if (! $contact) {
+                $contact = $customer->contacts()->create(['contact_name' => $contactName, 'is_primary' => true]);
+            }
+            $request->merge(['contact_id' => $contact->id]);
         }
     }
 

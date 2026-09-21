@@ -35,7 +35,7 @@ class DeliveryController extends Controller
 
     public function projects(Request $request)
     {
-        $query = DeliveryProject::with(['order:id,order_no,customer_id,product_name,current_stage', 'order.customer:id,legal_name,brand_name'])->withCount(['tasks', 'milestones']);
+        $query = DeliveryProject::with(['order:id,order_no,customer_id,customer_legal_name,current_stage', 'order.customer:id,legal_name,brand_name'])->withCount(['tasks', 'milestones']);
         $this->applyProjectScope($query);
 
         return $query->when($request->filled('status'), fn ($q) => $q->where('status', $request->input('status')))
