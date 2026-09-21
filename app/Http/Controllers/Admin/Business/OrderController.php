@@ -215,7 +215,7 @@ class OrderController extends Controller
     private function validateOrder(Request $request, ?int $id = null, bool $partial = false): array
     {
         $required = $partial ? 'sometimes' : 'required';
-        $requiredFiles = $partial ? 'sometimes' : 'required';
+        $paymentVoucherRule = $partial ? 'sometimes' : 'required';
 
         return $request->validate([
             'order_no' => ['sometimes', 'nullable', 'max:64', Rule::unique('order', 'order_no')->ignore($id)],
@@ -265,15 +265,15 @@ class OrderController extends Controller
             'portrait_authorized' => ['sometimes', 'boolean'],
             'complaint_history' => ['nullable', 'string'],
             'members' => ['sometimes', 'array'],
-            'contract_files' => [$requiredFiles, 'array', 'min:1'],
+            'contract_files' => ['sometimes', 'nullable', 'array'],
             'contract_files.*' => ['url', 'max:1000'],
-            'payment_voucher_files' => [$requiredFiles, 'array', 'min:1'],
+            'payment_voucher_files' => [$paymentVoucherRule, 'array', 'min:1'],
             'payment_voucher_files.*' => ['url', 'max:1000'],
-            'license_files' => [$requiredFiles, 'array', 'min:1'],
+            'license_files' => ['sometimes', 'nullable', 'array'],
             'license_files.*' => ['url', 'max:1000'],
-            'authorization_files' => [$requiredFiles, 'array', 'min:1'],
+            'authorization_files' => ['sometimes', 'nullable', 'array'],
             'authorization_files.*' => ['url', 'max:1000'],
-            'sales_handover_files' => [$requiredFiles, 'array', 'min:1'],
+            'sales_handover_files' => ['sometimes', 'nullable', 'array'],
             'sales_handover_files.*' => ['url', 'max:1000'],
             'approval_files' => ['sometimes', 'array'],
             'approval_files.*' => ['url', 'max:1000'],
