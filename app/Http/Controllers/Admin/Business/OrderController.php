@@ -89,6 +89,9 @@ class OrderController extends Controller
             $data['sales_user_id'] = $data['sales_user_id'] ?? Auth::id();
             $data['owner_user_id'] = $data['owner_user_id'] ?? $data['sales_user_id'];
             $data['created_by'] = Auth::id();
+            $data['current_stage'] = $data['current_stage'] ?? 'draft';
+            $data['business_status'] = $data['business_status'] ?? 'pending';
+            $data['health_status'] = $data['health_status'] ?? 'green';
             $data['paid_amount'] = 0;
             $data['receivable_amount'] = $data['payable_amount'];
             $order = Order::create($data);
