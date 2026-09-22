@@ -204,9 +204,49 @@ class OrderController extends Controller
         unset($data['id']);
 
         return DB::transaction(function () use ($order, $data) {
-            $order->update($data);
+            $from = $order->current_stage;
+            $order->update(array_merge($data, [
+                'current_stage' => 'service',
+                'business_status' => 'active',
+                'actual_start_date' => $order->actual_start_date ?: now()->toDateString(),
+            ]));
+            if ($from !== 'service') {
+                $this->logStage($order->fresh(), $from, 'service', '分配优化师并启动服务');
+            }
 
             return $this->withActions($order->fresh()->load(['members.user:id,name', 'technicalDirector:id,name', 'optimizer:id,name', 'owner:id,name']));
+        });
+    }
+
+    public function updateStatus(Request $request)
+    {
+        $data = $request->validate([
+            'id' => ['required', 'exists:order,id'],
+            'status' => ['required', Rule::in(['renewal', 'completed', 'cancelled'])],
+            'remark' => ['nullable', 'string', 'max:1000'],
+        ]);
+        $order = Order::findOrFail($data['id']);
+        $this->access->authorizeView($order);
+        abort_unless(in_array($order->current_stage, ['service', 'renewal'], true), 422, '仅服务中或续费中的订单可以修改状态');
+        abort_if($order->current_stage === $data['status'], 422, '订单已经是当前状态');
+
+        return DB::transaction(function () use ($order, $data) {
+            $from = $order->current_stage;
+            $values = [
+                'current_stage' => $data['status'],
+                'business_status' => match ($data['status']) {
+                    'completed' => 'completed',
+                    'cancelled' => 'cancelled',
+                    default => 'active',
+                },
+            ];
+            if ($data['status'] === 'completed') {
+                $values['completed_at'] = now();
+            }
+            $order->update($values);
+            $this->logStage($order->fresh(), $from, $data['status'], $data['remark'] ?? null);
+
+            return $this->withActions($order->fresh()->load(['optimizer:id,name', 'owner:id,name']));
         });
     }
 
@@ -369,8 +409,8 @@ class OrderController extends Controller
     {
         $allowed = [
             'draft' => ['sales_review', 'cancelled'], 'sales_review' => ['draft', 'finance_confirm', 'cancelled'],
-            'finance_confirm' => ['sales_review', 'tech_assign', 'cancelled'], 'tech_assign' => ['finance_confirm', 'service', 'cancelled'],
-            'service' => ['renewal', 'completed', 'cancelled'], 'renewal' => ['service', 'completed', 'cancelled'],
+            'finance_confirm' => ['sales_review', 'tech_assign', 'cancelled'], 'tech_assign' => ['finance_confirm', 'cancelled'],
+            'service' => [], 'renewal' => [],
             'completed' => [], 'cancelled' => [],
         ];
         abort_unless(in_array($to, $allowed[$from] ?? [], true), 422, "不允许从 {$from} 流转到 {$to}");
@@ -387,8 +427,6 @@ class OrderController extends Controller
             'sales_review' => ['sales', 'sales_manager', 'sales_director'],
             'draft', 'finance_confirm' => ['sales_manager', 'sales_director'],
             'tech_assign' => ['finance'],
-            'service' => ['technical_director'],
-            'renewal', 'completed' => ['technical_director', 'optimizer'],
             'cancelled' => ['sales_director', 'technical_director', 'finance'],
             default => [],
         };
@@ -418,12 +456,9 @@ class OrderController extends Controller
         if ($order->current_stage === 'finance_confirm' && ($this->access->isAdmin() || in_array('finance', $roles, true))) {
             $actions[] = 'confirm_finance';
         }
-        if ($order->current_stage === 'tech_assign' && ($this->access->isAdmin() || in_array('technical_director', $roles, true))) {
-            $actions[] = 'start_service';
-        }
         if (in_array($order->current_stage, ['service', 'renewal'], true)
-            && ($this->access->isAdmin() || array_intersect($roles, ['technical_director', 'optimizer']))) {
-            $actions[] = 'complete';
+            && ($this->access->isAdmin() || Auth::user()->hasPermissionTo('sales.order.status', 'admin'))) {
+            $actions[] = 'change_status';
         }
 
         return array_values(array_unique($actions));

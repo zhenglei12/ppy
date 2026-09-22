@@ -55,6 +55,7 @@ Route::group(['namespace' => 'Admin', 'middleware' => ['cross', 'auth:sanctum', 
         Route::post('orders/delete', 'Business\\OrderController@destroy')->name('business.orders.delete')->defaults('permission', 'sales.order.update');
         Route::post('orders/transition', 'Business\\OrderController@transition')->name('business.orders.transition')->defaults('permission', 'sales.order.view');
         Route::post('orders/assign', 'Business\\OrderController@assign')->name('business.orders.assign')->defaults('permission', 'sales.order.assign');
+        Route::post('orders/status', 'Business\\OrderController@updateStatus')->name('business.orders.status')->defaults('permission', 'sales.order.status');
 
         Route::get('finance/dashboard', 'Business\\FinanceController@dashboard')->name('business.finance.dashboard')->defaults('permission', 'finance.view');
         Route::post('finance/payment-plans/list', 'Business\\FinanceController@plans')->name('business.finance.plans.list')->defaults('permission', 'finance.view');
