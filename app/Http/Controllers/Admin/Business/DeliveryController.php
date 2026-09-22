@@ -24,16 +24,20 @@ class DeliveryController extends Controller
     public function dashboard()
     {
         $projectIds = $this->visibleProjectIds();
-        $global = $this->hasAnyRole(['admin', 'technical_director', 'sales_director', 'finance']);
+        $canAssign = $this->hasAnyRole(['admin', 'technical_director']);
+        $pendingOrders = $canAssign
+            ? Order::where('current_stage', 'tech_assign')->whereNotIn('business_status', ['cancelled'])
+                ->select('id', 'order_no', 'customer_legal_name', 'customer_industry', 'payable_amount', 'current_stage')
+                ->latest('id')->limit(20)->get()
+            : collect();
 
         return [
-            'pending_assign_count' => $global ? Order::where('current_stage', 'tech_assign')->count() : 0,
+            'pending_assign_count' => $pendingOrders->count(),
+            'pending_orders' => $pendingOrders,
             'active_project_count' => DeliveryProject::whereIn('id', $projectIds)->where('status', 'active')->count(),
             'completed_project_count' => DeliveryProject::whereIn('id', $projectIds)->where('status', 'completed')->count(),
-            'overdue_task_count' => DeliveryTask::whereIn('project_id', $projectIds)->whereNotIn('status', ['completed', 'cancelled'])->where('due_at', '<', now())->count(),
             'risk_distribution' => DeliveryProject::whereIn('id', $projectIds)->select('health_status', DB::raw('count(*) as total'))->groupBy('health_status')->pluck('total', 'health_status'),
             'node_distribution' => DeliveryProject::whereIn('id', $projectIds)->select('current_node', DB::raw('count(*) as total'))->groupBy('current_node')->pluck('total', 'current_node'),
-            'task_status_distribution' => DeliveryTask::whereIn('project_id', $projectIds)->select('status', DB::raw('count(*) as total'))->groupBy('status')->pluck('total', 'status'),
             'workload' => DeliveryTask::whereIn('project_id', $projectIds)->select('assignee_id', DB::raw('count(*) as total'))->whereNotIn('status', ['completed', 'cancelled'])->groupBy('assignee_id')->orderByDesc('total')->limit(20)->get(),
         ];
     }
