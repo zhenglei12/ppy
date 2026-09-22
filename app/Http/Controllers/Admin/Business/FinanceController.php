@@ -23,8 +23,9 @@ class FinanceController extends Controller
         $orders = Order::whereIn('id', $orderIds)->whereNotIn('business_status', ['cancelled']);
         $confirmedAmount = (clone $orders)->sum('paid_amount');
         $confirmedCount = (clone $orders)->where('paid_amount', '>', 0)->count();
-        $receivableAmount = (clone $orders)->sum(DB::raw('GREATEST(payable_amount - paid_amount, 0)'));
-        $receivableCount = (clone $orders)->whereRaw('GREATEST(payable_amount - paid_amount, 0) > 0')->count();
+        $receivableAmount = (clone $orders)->sum('receivable_amount');
+        $pendingAmount = max(0, (float) $receivableAmount - (float) $confirmedAmount);
+        $receivableCount = (clone $orders)->where('receivable_amount', '>', 0)->count();
         $pendingReviewOrders = (clone $orders)->where('current_stage', 'finance_confirm');
         $pendingReviewOrderCount = (clone $pendingReviewOrders)->count();
         $pendingReviewOrderAmount = (clone $pendingReviewOrders)->sum(DB::raw('GREATEST(payable_amount - paid_amount, 0)'));
@@ -38,6 +39,8 @@ class FinanceController extends Controller
             $paymentDistribution['confirmed'] = $confirmedCount;
         }
 
+        $refundOrders = (clone $orders)->whereNotNull('refund_status')->whereNotIn('refund_status', ['rejected', 'cancelled']);
+
         return [
             'pending_review_orders' => (clone $orders)->where('current_stage', 'finance_confirm')
                 ->select('id', 'order_no', 'customer_legal_name', 'customer_industry', 'payable_amount', 'paid_amount')
@@ -46,7 +49,7 @@ class FinanceController extends Controller
             'pending_review_order_amount' => $pendingReviewOrderAmount,
             'confirmed_amount' => $confirmedAmount,
             'confirmed_count' => $confirmedCount,
-            'pending_amount' => $receivableAmount,
+            'pending_amount' => $pendingAmount,
             'pending_count' => $receivableCount,
             'pending_payment_amount' => (clone $pendingPayments)->sum('amount'),
             'pending_payment_count' => (clone $pendingPayments)->count(),
@@ -54,8 +57,8 @@ class FinanceController extends Controller
             'overdue_plan_amount' => PaymentPlan::whereIn('order_id', $orderIds)->whereIn('status', ['pending', 'partial', 'overdue'])->whereDate('due_date', '<', today())->sum(DB::raw('planned_amount - paid_amount')),
             'overdue_plan_count' => PaymentPlan::whereIn('order_id', $orderIds)->whereIn('status', ['pending', 'partial', 'overdue'])->whereDate('due_date', '<', today())->count(),
             'invoice_pending_count' => Invoice::whereIn('order_id', $orderIds)->whereIn('status', ['requested', 'reviewing'])->count(),
-            'refunded_amount' => Refund::whereIn('order_id', $orderIds)->whereNotIn('status', ['rejected', 'cancelled'])->sum('refund_amount'),
-            'refund_count' => Refund::whereIn('order_id', $orderIds)->whereNotIn('status', ['rejected', 'cancelled'])->count(),
+            'refunded_amount' => (clone $refundOrders)->sum('refund_amount'),
+            'refund_count' => (clone $refundOrders)->count(),
             'payment_status_distribution' => $paymentDistribution,
             'receivable_aging' => [
                 '0_30_days' => PaymentPlan::whereIn('order_id', $orderIds)->whereIn('status', ['pending', 'partial', 'overdue'])->whereBetween('due_date', [today()->subDays(30), today()])->sum(DB::raw('planned_amount - paid_amount')),
