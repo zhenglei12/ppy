@@ -7,6 +7,7 @@ use App\Http\Model\Order;
 use App\Http\Model\Customer;
 use App\Http\Model\OrderMember;
 use App\Http\Model\OrderStageLog;
+use App\Http\Model\User;
 use App\Http\Services\OrderAccessService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -190,29 +191,33 @@ class OrderController extends Controller
     {
         $data = $request->validate([
             'id' => ['required', 'exists:order,id'],
-            'sales_manager_id' => ['nullable', 'exists:users,id'],
-            'technical_director_id' => ['nullable', 'exists:users,id'],
-            'optimizer_id' => ['nullable', 'exists:users,id'],
-            'owner_user_id' => ['nullable', 'exists:users,id'],
-            'members' => ['sometimes', 'array'],
-            'members.*.user_id' => ['required', 'exists:users,id'],
-            'members.*.member_role' => ['required', Rule::in(['sales', 'sales_manager', 'technical_director', 'optimizer'])],
-            'members.*.commission_ratio' => ['nullable', 'numeric', 'between:0,1'],
+            'optimizer_id' => ['required', 'exists:users,id'],
         ]);
+        abort_unless(
+            User::query()->whereKey($data['optimizer_id'])->whereHas('roles', fn ($role) => $role->where('alias', 'optimizer'))->exists(),
+            422,
+            '所选员工不是优化师'
+        );
         $order = Order::findOrFail($request->integer('id'));
         $this->access->authorizeView($order);
         abort_unless($this->access->canAssign($order), 403, '当前角色或订单阶段不允许分配成员');
-        $this->access->assertAssignableUsers($data);
-        unset($data['id'], $data['members']);
+        unset($data['id']);
 
-        return DB::transaction(function () use ($request, $order, $data) {
+        return DB::transaction(function () use ($order, $data) {
             $order->update($data);
-            if ($request->has('members')) {
-                $this->syncMembers($order, $request->input('members'));
-            }
 
             return $this->withActions($order->fresh()->load(['members.user:id,name', 'technicalDirector:id,name', 'optimizer:id,name', 'owner:id,name']));
         });
+    }
+
+    public function optimizers()
+    {
+        return User::query()
+            ->select(['id', 'name', 'employee_no', 'department_id', 'position_name'])
+            ->whereHas('roles', fn ($role) => $role->where('alias', 'optimizer'))
+            ->with('department:id,name')
+            ->orderBy('id')
+            ->get();
     }
 
     private function validateOrder(Request $request, ?int $id = null, bool $partial = false): array
