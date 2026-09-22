@@ -110,22 +110,33 @@ class OrderController extends Controller
     {
         $order = Order::findOrFail($request->integer('id'));
         $this->access->authorizeView($order);
-        abort_unless($this->access->canEdit($order), 403, '当前用户或订单阶段不允许修改');
-        $this->resolveCustomerInput($request, $order);
+        $isFinance = in_array('finance', $this->access->roles(), true);
+        abort_unless($this->access->canEdit($order) || $isFinance || $this->access->isAdmin(), 403, '当前用户或订单阶段不允许修改');
+        $financePaidOnly = $isFinance && ! $this->access->isAdmin();
+        if (! $financePaidOnly) {
+            $this->resolveCustomerInput($request, $order);
+        }
         $data = $this->validateOrder($request, $order->id, true);
+        if ($financePaidOnly) {
+            // 财务从订单编辑入口仅能调整到账金额，其他订单信息保持不变。
+            $data = ['paid_amount' => $data['paid_amount'] ?? $order->paid_amount];
+        } elseif (! $this->access->isAdmin()) {
+            // 到账金额仅允许财务和超级管理员修改，其他角色提交时强制沿用原值。
+            $data['paid_amount'] = $order->paid_amount;
+        }
         unset($data['customer_name'], $data['contact_name']);
         $this->validateContactCustomer(array_merge($order->only(['customer_id', 'contact_id']), $data));
         $assignmentChanges = collect($data)->only([
             'sales_user_id', 'sales_manager_id', 'technical_director_id', 'optimizer_id', 'owner_user_id',
         ])->all();
-        if ($request->has('members')) {
+        if (! $financePaidOnly && $request->has('members')) {
             $assignmentChanges['members'] = $request->input('members', []);
         }
         $this->access->assertAssignableUsers($assignmentChanges);
 
-        return DB::transaction(function () use ($request, $order, $data) {
+        return DB::transaction(function () use ($request, $order, $data, $financePaidOnly) {
             $order->update($this->normalizeAmounts(array_merge($order->only(['contract_amount', 'paid_amount']), $data)));
-            if ($request->has('members')) {
+            if (! $financePaidOnly && $request->has('members')) {
                 $this->syncMembers($order, $request->input('members', []));
             }
 
@@ -149,6 +160,7 @@ class OrderController extends Controller
             'id' => ['required', 'exists:order,id'],
             'to_stage' => ['required', Rule::in(self::STAGES)],
             'owner_user_id' => ['required', 'exists:users,id'],
+            'paid_amount' => ['required_if:to_stage,tech_assign', 'nullable', 'numeric', 'min:0'],
             'next_action' => ['nullable', 'string', 'max:500'],
             'next_action_at' => ['nullable', 'date'],
             'evidence_note' => ['nullable', 'string'],
@@ -170,6 +182,12 @@ class OrderController extends Controller
                 'next_action' => $request->input('next_action'),
                 'next_action_at' => $request->input('next_action_at'),
             ];
+            if ($to === 'tech_assign') {
+                $paidAmount = round((float) $request->input('paid_amount'), 2);
+                abort_if($paidAmount > (float) $order->payable_amount, 422, '财务确认到账金额不能大于应付金额');
+                $values['paid_amount'] = $paidAmount;
+                $values['receivable_amount'] = round((float) $order->payable_amount - $paidAmount, 2);
+            }
             if ($to === 'sales_review' && ! $order->submitted_at) {
                 $values['submitted_at'] = now();
             }
@@ -367,6 +385,7 @@ class OrderController extends Controller
             'product_type' => [$required, Rule::in(['trial', 'annual', 'other'])],
             'contract_no' => ['nullable', 'string', 'max:64', Rule::unique('order', 'contract_no')->ignore($id)],
             'contract_amount' => [$required, 'numeric', 'min:0'],
+            'paid_amount' => ['sometimes', 'numeric', 'min:0'],
             'payment_method' => ['nullable', Rule::in(['bank', 'wechat', 'alipay', 'cash', 'other'])],
             'payment_subject' => ['nullable', 'string', 'max:255'],
             'payment_due_date' => ['nullable', 'date'],
@@ -526,6 +545,9 @@ class OrderController extends Controller
         $actions = ['view'];
         $roles = $this->access->roles();
         if ($this->access->canEdit($order)) {
+            $actions[] = 'update';
+        }
+        if ($this->access->isAdmin() || in_array('finance', $roles, true)) {
             $actions[] = 'update';
         }
         if ($this->access->canDelete($order)) {
