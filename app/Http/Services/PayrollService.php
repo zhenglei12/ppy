@@ -117,6 +117,23 @@ class PayrollService
         }
 
         $ids = collect([$user->id]);
+        if (in_array('technical_director', $aliases, true)) {
+            $managedIds = collect($this->directReportTreeIds($user->id));
+            $departmentIds = $this->departmentTreeIds($user->department_id);
+            if ($departmentIds) {
+                $managedIds = $managedIds->merge(
+                    User::query()->whereIn('department_id', $departmentIds)->pluck('id')
+                );
+            }
+
+            $optimizerIds = User::query()
+                ->whereIn('id', $managedIds->unique()->values()->all())
+                ->whereHas('roles', fn (Builder $role) => $role->where('alias', 'optimizer'))
+                ->pluck('id');
+
+            return $ids->merge($optimizerIds)->map(fn ($id) => (int) $id)->unique()->values()->all();
+        }
+
         $managerAliases = ['sales_director', 'sales_manager', 'technical_director'];
         $isManager = (bool) array_intersect($aliases, $managerAliases)
             || User::where('direct_manager_id', $user->id)->exists();
@@ -135,6 +152,22 @@ class PayrollService
             ->pluck('id');
 
         return $ids->merge($teamIds)->unique()->values()->all();
+    }
+
+    private function directReportTreeIds(int $managerId): array
+    {
+        $all = collect([$managerId]);
+        $frontier = [$managerId];
+        while ($frontier) {
+            $children = User::whereIn('direct_manager_id', $frontier)
+                ->pluck('id')
+                ->map(fn ($id) => (int) $id)
+                ->all();
+            $frontier = array_values(array_diff($children, $all->all()));
+            $all = $all->merge($frontier)->unique();
+        }
+
+        return $all->values()->all();
     }
 
     public function canManageUser(int $userId): bool

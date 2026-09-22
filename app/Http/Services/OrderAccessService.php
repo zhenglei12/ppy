@@ -20,7 +20,7 @@ class OrderAccessService
     {
         $user = Auth::user();
         $roles = $this->roles();
-        if ($this->isAdmin() || in_array('finance', $roles, true)) {
+        if ($this->isAdmin() || array_intersect($roles, ['finance', 'technical_director'])) {
             return $query;
         }
 
@@ -97,6 +97,11 @@ class OrderAccessService
         if ($this->isAdmin()) {
             return ! in_array($order->current_stage, ['completed', 'cancelled'], true);
         }
+
+        if (! Auth::user()->hasPermissionTo('sales.order.assign', 'admin')) {
+            return false;
+        }
+
         $roles = $this->roles();
         if (array_intersect($roles, ['sales_manager', 'sales_director'])) {
             return in_array($order->current_stage, ['draft', 'sales_review', 'finance_confirm'], true)
