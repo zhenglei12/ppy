@@ -48,6 +48,10 @@ Route::group(['namespace' => 'Admin', 'middleware' => ['cross', 'auth:sanctum', 
         Route::post('weiwenjia/customers/list', 'Business\\WeiwenjiaCustomerController@index')->name('business.weiwenjia.customers.list')->defaults('permission', 'sales.customer.view');
         Route::get('weiwenjia/customers/detail', 'Business\\WeiwenjiaCustomerController@show')->name('business.weiwenjia.customers.detail')->defaults('permission', 'sales.customer.view');
         Route::post('weiwenjia/customers/sync', 'Business\\WeiwenjiaCustomerController@sync')->name('business.weiwenjia.customers.sync')->defaults('permission', 'sales.customer.manage');
+        Route::get('weiwenjia/crm/dashboard', 'Business\\WeiwenjiaCrmController@dashboard')->name('business.weiwenjia.crm.dashboard')->defaults('permission', 'crm.dashboard.view');
+        Route::get('weiwenjia/crm/call-records', 'Business\\WeiwenjiaCrmController@callRecords')->name('business.weiwenjia.crm.call-records')->defaults('permission', 'crm.dashboard.view');
+        Route::post('weiwenjia/crm/daily-stats', 'Business\\WeiwenjiaCrmController@upsertDaily')->name('business.weiwenjia.crm.daily-stats')->defaults('permission', 'crm.followup.manage');
+        Route::post('weiwenjia/crm/call-records', 'Business\\WeiwenjiaCrmController@ingest')->name('business.weiwenjia.crm.call-records.ingest')->withoutMiddleware('ly.permission');
         Route::get('sales/dashboard', 'Business\\SalesController@dashboard')->name('business.sales.dashboard')->defaults('permission', 'sales.dashboard.view');
         Route::get('overview/dashboard', 'Business\\OverviewController@dashboard')->name('business.overview.dashboard')->defaults('permission', 'dashboard.view');
 
