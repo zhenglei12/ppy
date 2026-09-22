@@ -17,6 +17,8 @@ class Customer extends Model
         'contact_authorized' => 'boolean',
         'material_authorized' => 'boolean',
         'next_follow_at' => 'datetime:Y-m-d H:i:s',
+        'external_labels' => 'array',
+        'external_payload' => 'array',
     ];
 
     public function contacts()

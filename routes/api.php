@@ -45,6 +45,9 @@ Route::group(['namespace' => 'Admin', 'middleware' => ['cross', 'auth:sanctum', 
         Route::post('customers/create', 'Business\\CustomerController@store')->name('business.customers.create')->defaults('permission', 'sales.customer.manage');
         Route::post('customers/update', 'Business\\CustomerController@update')->name('business.customers.update')->defaults('permission', 'sales.customer.manage');
         Route::post('customers/delete', 'Business\\CustomerController@destroy')->name('business.customers.delete')->defaults('permission', 'sales.customer.manage');
+        Route::post('weiwenjia/customers/list', 'Business\\WeiwenjiaCustomerController@index')->name('business.weiwenjia.customers.list')->defaults('permission', 'sales.customer.view');
+        Route::get('weiwenjia/customers/detail', 'Business\\WeiwenjiaCustomerController@show')->name('business.weiwenjia.customers.detail')->defaults('permission', 'sales.customer.view');
+        Route::post('weiwenjia/customers/sync', 'Business\\WeiwenjiaCustomerController@sync')->name('business.weiwenjia.customers.sync')->defaults('permission', 'sales.customer.manage');
         Route::get('sales/dashboard', 'Business\\SalesController@dashboard')->name('business.sales.dashboard')->defaults('permission', 'sales.dashboard.view');
         Route::get('overview/dashboard', 'Business\\OverviewController@dashboard')->name('business.overview.dashboard')->defaults('permission', 'dashboard.view');
 

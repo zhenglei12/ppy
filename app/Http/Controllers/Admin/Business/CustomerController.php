@@ -14,7 +14,7 @@ class CustomerController extends Controller
 {
     public function index(Request $request)
     {
-        $query = Customer::query()->with(['owner:id,name,employee_no', 'coOwner:id,name,employee_no'])
+        $query = Customer::query()->where('source', 'local')->with(['owner:id,name,employee_no', 'coOwner:id,name,employee_no'])
             ->withCount(['contacts', 'orders']);
 
         $this->applyDataScope($query);
@@ -38,7 +38,7 @@ class CustomerController extends Controller
 
     public function show(Request $request)
     {
-        $customer = Customer::with(['contacts', 'owner:id,name,employee_no', 'coOwner:id,name,employee_no', 'orders:id,order_no,customer_id,customer_legal_name,payable_amount,paid_amount,receivable_amount,current_stage,business_status,health_status,next_action_at'])
+        $customer = Customer::where('source', 'local')->with(['contacts', 'owner:id,name,employee_no', 'coOwner:id,name,employee_no', 'orders:id,order_no,customer_id,customer_legal_name,payable_amount,paid_amount,receivable_amount,current_stage,business_status,health_status,next_action_at'])
             ->findOrFail($request->integer('id'));
         $this->authorizeCustomer($customer);
 
