@@ -19,20 +19,35 @@ class FinanceController extends Controller
     public function dashboard()
     {
         $orderIds = $this->visibleOrderIds();
-        $confirmed = Payment::whereIn('order_id', $orderIds)->where('confirmation_status', 'confirmed');
+        // 订单的财务确认到账金额存储在 order.paid_amount，收款记录表用于展示明细和待确认记录。
+        $orders = Order::whereIn('id', $orderIds)->whereNotIn('business_status', ['cancelled']);
+        $confirmedAmount = (clone $orders)->sum('paid_amount');
+        $confirmedCount = (clone $orders)->where('paid_amount', '>', 0)->count();
+        $pendingPayments = Payment::whereIn('order_id', $orderIds)->where('confirmation_status', 'pending');
+        $paymentDistribution = Payment::whereIn('order_id', $orderIds)
+            ->select('confirmation_status', DB::raw('count(*) as total'))
+            ->groupBy('confirmation_status')
+            ->pluck('total', 'confirmation_status')
+            ->toArray();
+        if ($confirmedCount > 0) {
+            $paymentDistribution['confirmed'] = $confirmedCount;
+        }
 
         return [
-            'confirmed_amount' => (clone $confirmed)->sum('amount'),
-            'confirmed_count' => (clone $confirmed)->count(),
-            'pending_amount' => Payment::whereIn('order_id', $orderIds)->where('confirmation_status', 'pending')->sum('amount'),
-            'pending_count' => Payment::whereIn('order_id', $orderIds)->where('confirmation_status', 'pending')->count(),
-            'receivable_amount' => Order::whereIn('id', $orderIds)->whereNotIn('business_status', ['cancelled'])->sum('receivable_amount'),
+            'pending_review_orders' => (clone $orders)->where('current_stage', 'finance_confirm')
+                ->select('id', 'order_no', 'customer_legal_name', 'customer_industry', 'payable_amount', 'paid_amount')
+                ->latest('id')->limit(10)->get(),
+            'confirmed_amount' => $confirmedAmount,
+            'confirmed_count' => $confirmedCount,
+            'pending_amount' => (clone $pendingPayments)->sum('amount'),
+            'pending_count' => (clone $pendingPayments)->count(),
+            'receivable_amount' => (clone $orders)->sum('receivable_amount'),
             'overdue_plan_amount' => PaymentPlan::whereIn('order_id', $orderIds)->whereIn('status', ['pending', 'partial', 'overdue'])->whereDate('due_date', '<', today())->sum(DB::raw('planned_amount - paid_amount')),
             'overdue_plan_count' => PaymentPlan::whereIn('order_id', $orderIds)->whereIn('status', ['pending', 'partial', 'overdue'])->whereDate('due_date', '<', today())->count(),
             'invoice_pending_count' => Invoice::whereIn('order_id', $orderIds)->whereIn('status', ['requested', 'reviewing'])->count(),
             'refunded_amount' => Refund::whereIn('order_id', $orderIds)->where('status', 'refunded')->sum('refund_amount'),
             'refund_count' => Refund::whereIn('order_id', $orderIds)->where('status', 'refunded')->count(),
-            'payment_status_distribution' => Payment::whereIn('order_id', $orderIds)->select('confirmation_status', DB::raw('count(*) as total'))->groupBy('confirmation_status')->pluck('total', 'confirmation_status'),
+            'payment_status_distribution' => $paymentDistribution,
             'receivable_aging' => [
                 '0_30_days' => PaymentPlan::whereIn('order_id', $orderIds)->whereIn('status', ['pending', 'partial', 'overdue'])->whereBetween('due_date', [today()->subDays(30), today()])->sum(DB::raw('planned_amount - paid_amount')),
                 '31_60_days' => PaymentPlan::whereIn('order_id', $orderIds)->whereIn('status', ['pending', 'partial', 'overdue'])->whereBetween('due_date', [today()->subDays(60), today()->subDays(31)])->sum(DB::raw('planned_amount - paid_amount')),
@@ -242,7 +257,8 @@ class FinanceController extends Controller
         $query = Order::query();
         $user = Auth::user();
         $roles = $user->roles->pluck('alias')->all();
-        if (! array_intersect($roles, ['admin', 'finance', 'sales_director'])) {
+        $isAdmin = $user->name === 'admin' || in_array('admin', $roles, true);
+        if (! $isAdmin && ! array_intersect($roles, ['finance', 'sales_director'])) {
             if (in_array('sales_manager', $roles, true)) {
                 $teamIds = \App\Http\Model\User::where('direct_manager_id', $user->id)->pluck('id')->push($user->id);
                 $query->whereIn('sales_user_id', $teamIds);
