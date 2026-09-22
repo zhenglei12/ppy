@@ -21,14 +21,16 @@ class FinanceController extends Controller
         $orderIds = $this->visibleOrderIds();
         // 订单的财务确认到账金额存储在 order.paid_amount，收款记录表用于展示明细和待确认记录。
         $orders = Order::whereIn('id', $orderIds)->whereNotIn('business_status', ['cancelled']);
+        $contractAmount = (clone $orders)->sum('payable_amount');
         $confirmedAmount = (clone $orders)->sum('paid_amount');
         $confirmedCount = (clone $orders)->where('paid_amount', '>', 0)->count();
-        $receivableAmount = (clone $orders)->sum('receivable_amount');
-        $pendingAmount = max(0, (float) $receivableAmount - (float) $confirmedAmount);
-        $receivableCount = (clone $orders)->where('receivable_amount', '>', 0)->count();
+        // 以合同金额和已确认到账金额实时计算待收，避免历史 receivable_amount 未同步导致看板失真。
+        $receivableAmount = (clone $orders)->sum(DB::raw('GREATEST(payable_amount - paid_amount, 0)'));
+        $receivableCount = (clone $orders)->whereRaw('payable_amount > paid_amount')->count();
         $pendingReviewOrders = (clone $orders)->where('current_stage', 'finance_confirm');
         $pendingReviewOrderCount = (clone $pendingReviewOrders)->count();
         $pendingReviewOrderAmount = (clone $pendingReviewOrders)->sum(DB::raw('GREATEST(payable_amount - paid_amount, 0)'));
+        $pendingAmount = $pendingReviewOrderAmount;
         $pendingPayments = Payment::whereIn('order_id', $orderIds)->where('confirmation_status', 'pending');
         $paymentDistribution = Payment::whereIn('order_id', $orderIds)
             ->select('confirmation_status', DB::raw('count(*) as total'))
@@ -49,8 +51,10 @@ class FinanceController extends Controller
             'pending_review_order_amount' => $pendingReviewOrderAmount,
             'confirmed_amount' => $confirmedAmount,
             'confirmed_count' => $confirmedCount,
+            'contract_amount' => $contractAmount,
             'pending_amount' => $pendingAmount,
-            'pending_count' => $receivableCount,
+            'pending_count' => $pendingReviewOrderCount,
+            'receivable_count' => $receivableCount,
             'pending_payment_amount' => (clone $pendingPayments)->sum('amount'),
             'pending_payment_count' => (clone $pendingPayments)->count(),
             'receivable_amount' => $receivableAmount,
