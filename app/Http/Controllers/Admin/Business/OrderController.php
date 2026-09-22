@@ -5,8 +5,11 @@ namespace App\Http\Controllers\Admin\Business;
 use App\Http\Controllers\Controller;
 use App\Http\Model\Order;
 use App\Http\Model\Customer;
+use App\Http\Model\DeliveryMilestone;
+use App\Http\Model\DeliveryProject;
 use App\Http\Model\OrderMember;
 use App\Http\Model\OrderStageLog;
+use App\Http\Model\Refund;
 use App\Http\Model\User;
 use App\Http\Services\OrderAccessService;
 use Illuminate\Http\Request;
@@ -205,11 +208,17 @@ class OrderController extends Controller
 
         return DB::transaction(function () use ($order, $data) {
             $from = $order->current_stage;
+            $technicalDirectorId = $order->technical_director_id;
+            if (! $technicalDirectorId && in_array('technical_director', $this->access->roles(), true)) {
+                $technicalDirectorId = Auth::id();
+            }
             $order->update(array_merge($data, [
+                'technical_director_id' => $technicalDirectorId,
                 'current_stage' => 'service',
                 'business_status' => 'active',
                 'actual_start_date' => $order->actual_start_date ?: now()->toDateString(),
             ]));
+            $this->syncDeliveryProject($order->fresh());
             if ($from !== 'service') {
                 $this->logStage($order->fresh(), $from, 'service', '分配优化师并启动服务');
             }
@@ -227,7 +236,7 @@ class OrderController extends Controller
         ]);
         $order = Order::findOrFail($data['id']);
         $this->access->authorizeView($order);
-        abort_unless(in_array($order->current_stage, ['service', 'renewal'], true), 422, '仅服务中或续费中的订单可以修改状态');
+        abort_unless(in_array($order->current_stage, ['service', 'renewal', 'completed'], true), 422, '仅服务中、续费中或已完成的订单可以修改状态');
         abort_if($order->current_stage === $data['status'], 422, '订单已经是当前状态');
 
         return DB::transaction(function () use ($order, $data) {
@@ -244,9 +253,88 @@ class OrderController extends Controller
                 $values['completed_at'] = now();
             }
             $order->update($values);
+            $this->syncDeliveryProject($order->fresh());
             $this->logStage($order->fresh(), $from, $data['status'], $data['remark'] ?? null);
 
             return $this->withActions($order->fresh()->load(['optimizer:id,name', 'owner:id,name']));
+        });
+    }
+
+    private function syncDeliveryProject(Order $order): DeliveryProject
+    {
+        $project = DeliveryProject::withTrashed()->firstOrNew(['order_id' => $order->id]);
+        $isNew = ! $project->exists;
+        if ($project->trashed()) {
+            $project->restore();
+        }
+        if ($isNew) {
+            $project->project_no = 'PRJORD'.str_pad((string) $order->id, 8, '0', STR_PAD_LEFT);
+            $project->created_by = Auth::id();
+        }
+        $project->technical_director_id = $order->technical_director_id;
+        $project->optimizer_id = $order->optimizer_id;
+        $project->planned_start_date = $order->expected_start_date;
+        $project->actual_start_date = $order->actual_start_date;
+        $project->planned_end_date = $order->expected_end_date;
+        $project->status = match ($order->current_stage) {
+            'completed' => 'completed',
+            'cancelled' => 'terminated',
+            default => 'active',
+        };
+        $project->save();
+
+        if ($isNew) {
+            $start = $project->planned_start_date ?: now();
+            foreach ([['D1', '成功标准确认', 1], ['D3', '成功标准完成', 2], ['D7', '事实与基线', 3], ['D15', '方向确认', 4], ['D30', '价值复盘', 5], ['D60', '续费预警', 6], ['D90', '报价与到账', 7]] as [$code, $name, $sequence]) {
+                DeliveryMilestone::create([
+                    'project_id' => $project->id,
+                    'milestone_code' => $code,
+                    'milestone_name' => $name,
+                    'sequence_no' => $sequence,
+                    'planned_at' => $start->copy()->addDays((int) substr($code, 1)),
+                ]);
+            }
+        }
+
+        return $project;
+    }
+
+    public function refund(Request $request)
+    {
+        $data = $request->validate([
+            'id' => ['required', 'exists:order,id'],
+            'refund_amount' => ['required', 'numeric', 'gt:0'],
+            'refund_reason' => ['required', 'string', 'max:1000'],
+            'refund_screenshot_files' => ['required', 'array', 'min:1'],
+            'refund_screenshot_files.*' => ['url', 'max:1000'],
+        ]);
+        $order = Order::findOrFail($data['id']);
+        $this->access->authorizeView($order);
+        abort_if((float) $data['refund_amount'] > (float) $order->paid_amount, 422, '退款金额不能大于订单已收金额');
+        abort_if(Refund::where('order_id', $order->id)->whereIn('status', ['pending', 'approved'])->exists(), 422, '该订单已有待处理退款申请');
+
+        return DB::transaction(function () use ($order, $data) {
+            $refund = Refund::create([
+                'refund_no' => 'REF-'.now()->format('YmdHis').'-'.strtoupper(Str::random(6)),
+                'order_id' => $order->id,
+                'refund_amount' => $data['refund_amount'],
+                'refund_reason' => $data['refund_reason'],
+                'status' => 'pending',
+                'requested_by' => Auth::id(),
+                'remark' => '订单售后申请，退款截图已保存至订单',
+            ]);
+            $order->update([
+                'refund_amount' => $data['refund_amount'],
+                'refund_reason' => $data['refund_reason'],
+                'refund_status' => 'pending',
+                'refund_screenshot_files' => $data['refund_screenshot_files'],
+                'refund_applied_at' => now(),
+            ]);
+
+            return [
+                'order' => $this->withActions($order->fresh()->load(['optimizer:id,name', 'owner:id,name'])),
+                'refund' => $refund,
+            ];
         });
     }
 
@@ -456,9 +544,12 @@ class OrderController extends Controller
         if ($order->current_stage === 'finance_confirm' && ($this->access->isAdmin() || in_array('finance', $roles, true))) {
             $actions[] = 'confirm_finance';
         }
-        if (in_array($order->current_stage, ['service', 'renewal'], true)
-            && ($this->access->isAdmin() || Auth::user()->hasPermissionTo('sales.order.status', 'admin'))) {
+        if (in_array($order->current_stage, ['service', 'renewal', 'completed'], true)
+            && $this->access->hasPermission('sales.order.status')) {
             $actions[] = 'change_status';
+        }
+        if ($this->access->hasPermission('sales.order.refund')) {
+            $actions[] = 'refund';
         }
 
         return array_values(array_unique($actions));

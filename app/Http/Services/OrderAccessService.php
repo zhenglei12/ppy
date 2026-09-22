@@ -95,7 +95,7 @@ class OrderAccessService
     public function canAssign(Order $order): bool
     {
         if ($this->isAdmin()) {
-            return ! in_array($order->current_stage, ['completed', 'cancelled'], true);
+            return $order->current_stage !== 'cancelled';
         }
 
         if (! Auth::user()->hasPermissionTo('sales.order.assign', 'admin')) {
@@ -108,7 +108,7 @@ class OrderAccessService
                 && in_array($order->sales_user_id, $this->salesVisibleUserIds(Auth::user(), $roles), true);
         }
         if (in_array('technical_director', $roles, true)) {
-            return in_array($order->current_stage, ['finance_confirm', 'tech_assign', 'service'], true);
+            return in_array($order->current_stage, ['finance_confirm', 'tech_assign', 'service', 'completed'], true);
         }
 
         return false;
@@ -150,6 +150,17 @@ class OrderAccessService
         return Auth::user()->name === 'admin' || in_array('admin', $this->roles(), true);
     }
 
+    public function hasPermission(string $permission): bool
+    {
+        if ($this->isAdmin()) {
+            return true;
+        }
+
+        return Auth::user()->getAllPermissions()->contains(
+            fn ($item) => $item->name === $permission && $item->guard_name === 'admin'
+        );
+    }
+
     /**
      * 当前登录用户在销售业务中可见的员工 ID。
      *
@@ -159,6 +170,17 @@ class OrderAccessService
     public function visibleSalesUserIds(): array
     {
         return $this->salesVisibleUserIds(Auth::user(), $this->roles());
+    }
+
+    /**
+     * 当前登录用户在交付业务中可见的员工 ID。
+     *
+     * 技术总监可查看本人、直属下属，以及本人部门和所有下级部门的员工；
+     * 优化师仅能查看本人。
+     */
+    public function visibleDeliveryUserIds(): array
+    {
+        return $this->deliveryVisibleUserIds(Auth::user(), $this->roles());
     }
 
     private function salesVisibleUserIds(User $user, array $roles): array

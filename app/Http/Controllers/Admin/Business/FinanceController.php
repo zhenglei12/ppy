@@ -204,6 +204,7 @@ class FinanceController extends Controller
                 $values['refunded_at'] = now();
             }
             $refund->update($values);
+            Order::whereKey($refund->order_id)->update(['refund_status' => $data['status']]);
             $this->syncOrderFinance($refund->order_id);
 
             return $refund->fresh()->load('order.customer', 'payment');

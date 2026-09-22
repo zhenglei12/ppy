@@ -8,6 +8,7 @@ use App\Http\Model\DeliveryMilestone;
 use App\Http\Model\DeliveryProject;
 use App\Http\Model\DeliveryTask;
 use App\Http\Model\Order;
+use App\Http\Services\OrderAccessService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -16,6 +17,10 @@ use Illuminate\Validation\Rule;
 
 class DeliveryController extends Controller
 {
+    public function __construct(private OrderAccessService $access)
+    {
+    }
+
     public function dashboard()
     {
         $projectIds = $this->visibleProjectIds();
@@ -118,11 +123,7 @@ class DeliveryController extends Controller
     public function tasks(Request $request)
     {
         $query = DeliveryTask::with(['project.order.customer:id,legal_name,brand_name', 'milestone:id,milestone_code,milestone_name']);
-        $user = Auth::user();
-        $roles = $user->roles->pluck('alias')->all();
-        if (! array_intersect($roles, ['admin', 'technical_director', 'sales_director', 'finance'])) {
-            $query->whereHas('project', fn ($project) => $project->where('optimizer_id', $user->id)->orWhere('technical_director_id', $user->id)->orWhereHas('order', fn ($order) => $order->where('sales_user_id', $user->id)));
-        }
+        $query->whereIn('project_id', $this->visibleProjectIds());
 
         return $query->when($request->filled('project_id'), fn ($q) => $q->where('project_id', $request->integer('project_id')))
             ->when($request->filled('assignee_id'), fn ($q) => $q->where('assignee_id', $request->integer('assignee_id')))
@@ -219,7 +220,18 @@ class DeliveryController extends Controller
     {
         $user = Auth::user();
         $roles = $user->roles->pluck('alias')->all();
-        if (array_intersect($roles, ['admin', 'technical_director', 'sales_director', 'finance'])) {
+        if (array_intersect($roles, ['admin', 'sales_director', 'finance'])) {
+            return;
+        }
+        if (in_array('technical_director', $roles, true)) {
+            $visibleUserIds = $this->access->visibleDeliveryUserIds();
+            $query->where(function ($scope) use ($user, $visibleUserIds) {
+                $scope->where('technical_director_id', $user->id);
+                if ($visibleUserIds) {
+                    $scope->orWhereIn('optimizer_id', $visibleUserIds);
+                }
+            });
+
             return;
         }
         $query->where(fn ($q) => $q->where('optimizer_id', $user->id)->orWhere('technical_director_id', $user->id)->orWhereHas('order', fn ($o) => $o->where('sales_user_id', $user->id)));
