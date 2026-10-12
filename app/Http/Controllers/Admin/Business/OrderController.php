@@ -8,6 +8,7 @@ use App\Http\Model\Customer;
 use App\Http\Model\DeliveryMilestone;
 use App\Http\Model\DeliveryProject;
 use App\Http\Model\OrderMember;
+use App\Http\Model\OrderOptimizationReport;
 use App\Http\Model\OrderStageLog;
 use App\Http\Model\Refund;
 use App\Http\Model\User;
@@ -33,6 +34,13 @@ class OrderController extends Controller
             'salesUser:id,name,department_id', 'salesManager:id,name,department_id',
             'technicalDirector:id,name,department_id', 'optimizer:id,name,department_id',
             'owner:id,name,department_id',
+        ])->addSelect([
+            'current_service_status' => OrderOptimizationReport::query()
+                ->select('current_mention_rate')
+                ->whereColumn('order_id', 'order.id')
+                ->orderByDesc('data_report_at')
+                ->orderByDesc('id')
+                ->limit(1),
         ]);
         $this->access->applyScope($query);
 
@@ -277,6 +285,23 @@ class OrderController extends Controller
 
             return $this->withActions($order->fresh()->load(['optimizer:id,name', 'owner:id,name']));
         });
+    }
+
+    public function updateHealthStatus(Request $request)
+    {
+        $data = $request->validate([
+            'order_id' => ['required', 'exists:order,id'],
+            'health_status' => ['required', Rule::in(['green', 'yellow', 'red'])],
+        ]);
+        $order = Order::findOrFail($data['order_id']);
+        $this->access->authorizeView($order);
+        $order->update(['health_status' => $data['health_status']]);
+
+        return $this->withActions($order->fresh()->load([
+            'customer:id,customer_no,legal_name,brand_name',
+            'optimizer:id,name,employee_no',
+            'owner:id,name,employee_no',
+        ]));
     }
 
     private function syncDeliveryProject(Order $order): DeliveryProject

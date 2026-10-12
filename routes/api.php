@@ -63,6 +63,7 @@ Route::group(['namespace' => 'Admin', 'middleware' => ['cross', 'auth:sanctum', 
         Route::post('orders/transition', 'Business\\OrderController@transition')->name('business.orders.transition')->defaults('permission', 'sales.order.view');
         Route::post('orders/assign', 'Business\\OrderController@assign')->name('business.orders.assign')->defaults('permission', 'sales.order.assign');
         Route::post('orders/status', 'Business\\OrderController@updateStatus')->name('business.orders.status')->defaults('permission', 'sales.order.status');
+        Route::post('orders/health-status', 'Business\\OrderController@updateHealthStatus')->name('business.orders.health-status')->defaults('permission', 'sales.order.health_status');
         Route::post('orders/refund', 'Business\\OrderController@refund')->name('business.orders.refund')->defaults('permission', 'sales.order.refund');
         Route::post('orders/final-payment', 'Business\\OrderController@finalPayment')->name('business.orders.final-payment')->defaults('permission', 'sales.order.final_payment');
 
