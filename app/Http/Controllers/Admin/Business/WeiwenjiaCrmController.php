@@ -8,16 +8,62 @@ use App\Http\Model\WeiwenjiaDailyStat;
 use App\Http\Model\WeiwenjiaUser;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Artisan;
 
 class WeiwenjiaCrmController extends Controller
 {
     public function dashboard(Request $request)
     {
         $date = Carbon::parse($request->input('date', now()->toDateString()))->toDateString();
-        $query = WeiwenjiaDailyStat::query()->whereDate('report_date', $date);
-        $stats = (clone $query)->selectRaw('COALESCE(SUM(effective_calls),0) effective_calls, COALESCE(SUM(effective_communications),0) effective_communications, COALESCE(SUM(wechat_adds),0) wechat_adds, COALESCE(SUM(effective_dialogues),0) effective_dialogues, COALESCE(SUM(effective_activations),0) effective_activations, COALESCE(SUM(daily_moments),0) daily_moments, COALESCE(SUM(ai_reports),0) ai_reports, COALESCE(SUM(appointments),0) appointments, COALESCE(SUM(accompany_visits),0) accompany_visits, COALESCE(SUM(today_deals),0) today_deals')->first();
-        return ['date' => $date, 'summary' => $stats, 'members' => $query->orderBy('department_name')->orderByDesc('effective_calls')->paginate($request->integer('pageSize', 50))];
+        $calls = WeiwenjiaCallRecord::query()->whereDate('called_at', $date);
+        $summary = (clone $calls)->selectRaw('COUNT(*) total_calls, COALESCE(SUM(through),0) connected_calls, COALESCE(SUM(duration),0) total_duration, COUNT(DISTINCT NULLIF(external_user_id, \'\')) active_members')->first()->toArray();
+        $summary['unconnected_calls'] = (int) $summary['total_calls'] - (int) $summary['connected_calls'];
+        $summary['connection_rate'] = (int) $summary['total_calls'] > 0
+            ? round((int) $summary['connected_calls'] * 100 / (int) $summary['total_calls'], 1)
+            : 0;
+
+        $callStats = WeiwenjiaCallRecord::query()
+            ->whereDate('called_at', $date)
+            ->selectRaw('external_user_id, COUNT(*) total_calls, COALESCE(SUM(through),0) connected_calls, COALESCE(SUM(duration),0) total_duration')
+            ->groupBy('external_user_id');
+        $members = WeiwenjiaUser::query()
+            ->leftJoinSub($callStats, 'call_stats', 'call_stats.external_user_id', '=', 'crm_weiwenjia_users.external_id')
+            ->selectRaw('crm_weiwenjia_users.id, crm_weiwenjia_users.external_id, crm_weiwenjia_users.name user_name, crm_weiwenjia_users.department_name, COALESCE(call_stats.total_calls,0) total_calls, COALESCE(call_stats.connected_calls,0) connected_calls, COALESCE(call_stats.total_duration,0) total_duration')
+            ->orderBy('crm_weiwenjia_users.department_name')
+            ->orderByDesc('total_calls')
+            ->paginate($request->integer('pageSize', 50));
+        $members->getCollection()->transform(function ($member) {
+            $member->unconnected_calls = (int) $member->total_calls - (int) $member->connected_calls;
+            $member->connection_rate = (int) $member->total_calls > 0
+                ? round((int) $member->connected_calls * 100 / (int) $member->total_calls, 1)
+                : 0;
+            $member->average_duration = (int) $member->connected_calls > 0
+                ? round((int) $member->total_duration / (int) $member->connected_calls)
+                : 0;
+            return $member;
+        });
+
+        return ['date' => $date, 'summary' => $summary, 'members' => $members];
+    }
+
+    public function sync(Request $request)
+    {
+        $date = Carbon::parse($request->input('date', now()->toDateString()))->toDateString();
+        $userExitCode = Artisan::call('crm:sync-weiwenjia-users');
+        if ($userExitCode !== 0) {
+            return response()->json(['message' => trim(Artisan::output()) ?: '微问家成员同步失败'], 500);
+        }
+        $callExitCode = Artisan::call('crm:sync-weiwenjia-call-records', ['--date' => $date, '--page-size' => 1000]);
+        if ($callExitCode !== 0) {
+            return response()->json(['message' => trim(Artisan::output()) ?: '微问家通话流水同步失败'], 500);
+        }
+
+        return [
+            'message' => '同步完成',
+            'date' => $date,
+            'user_count' => WeiwenjiaUser::count(),
+            'call_count' => WeiwenjiaCallRecord::whereDate('called_at', $date)->count(),
+        ];
     }
 
     public function callRecords(Request $request)

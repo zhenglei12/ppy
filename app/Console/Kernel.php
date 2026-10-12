@@ -15,6 +15,7 @@ class Kernel extends ConsoleKernel
     protected $commands = [
         \App\Console\Commands\SyncWeiwenjiaCustomers::class,
         \App\Console\Commands\SyncWeiwenjiaExternalUsers::class,
+        \App\Console\Commands\SyncWeiwenjiaCallRecords::class,
     ];
 
     /**
@@ -27,6 +28,7 @@ class Kernel extends ConsoleKernel
     {
         $schedule->command('crm:sync-weiwenjia')->dailyAt('02:00');
         $schedule->command('crm:sync-weiwenjia-users')->dailyAt('02:10');
+        $schedule->command('crm:sync-weiwenjia-call-records --date=yesterday')->dailyAt('02:20');
     }
 
     /**
