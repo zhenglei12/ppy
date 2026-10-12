@@ -26,6 +26,9 @@ class Order extends Model
         'payable_amount',
         'paid_amount',
         'receivable_amount',
+        'final_payment_amount',
+        'final_payment_screenshot_files',
+        'enterprise_target_mention_rate',
         'payment_method',
         'payment_subject',
         'payment_due_date',
@@ -83,6 +86,9 @@ class Order extends Model
         'payable_amount' => 'decimal:2',
         'paid_amount' => 'decimal:2',
         'receivable_amount' => 'decimal:2',
+        'final_payment_amount' => 'decimal:2',
+        'final_payment_screenshot_files' => 'array',
+        'enterprise_target_mention_rate' => 'decimal:2',
         'payment_due_date' => 'date:Y-m-d',
         'invoice_required' => 'boolean',
         'next_action_at' => 'datetime:Y-m-d H:i:s',
@@ -178,6 +184,11 @@ class Order extends Model
     public function deliveryProject()
     {
         return $this->hasOne(DeliveryProject::class, 'order_id');
+    }
+
+    public function optimizationReports()
+    {
+        return $this->hasMany(OrderOptimizationReport::class, 'order_id')->orderByDesc('data_report_at')->orderByDesc('id');
     }
 
 

@@ -8,6 +8,8 @@ use App\Http\Model\DeliveryMilestone;
 use App\Http\Model\DeliveryProject;
 use App\Http\Model\DeliveryTask;
 use App\Http\Model\Order;
+use App\Http\Model\OrderOptimizationReport;
+use App\Http\Model\User;
 use App\Http\Services\OrderAccessService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -209,6 +211,78 @@ class DeliveryController extends Controller
         $evidence->update(['status' => $data['status'], 'review_note' => $data['review_note'] ?? null, 'reviewed_by' => Auth::id(), 'reviewed_at' => now()]);
 
         return $evidence->fresh();
+    }
+
+    public function optimizationReports(Request $request)
+    {
+        $data = $request->validate([
+            'order_id' => ['required', 'exists:order,id'],
+            'pageSize' => ['sometimes', 'integer', 'between:1,100'],
+        ]);
+        $order = Order::findOrFail($data['order_id']);
+        $this->access->authorizeView($order);
+
+        return $order->optimizationReports()
+            ->with(['publisher:id,name,employee_no', 'creator:id,name,employee_no'])
+            ->paginate($request->integer('pageSize', 20));
+    }
+
+    public function saveOptimizationReport(Request $request)
+    {
+        $id = $request->integer('id') ?: null;
+        $required = $id ? 'sometimes' : 'required';
+        $data = $request->validate([
+            'id' => ['nullable', 'exists:order_optimization_reports,id'],
+            'order_id' => [$required, 'exists:order,id'],
+            'project_name' => [$required, 'string', 'max:255'],
+            'service_cycle' => [$required, Rule::in(['one_month', 'three_months', 'annual'])],
+            'optimization_stage' => [$required, Rule::in(['first', 'second', 'third'])],
+            'core_work_content' => ['sometimes', 'nullable', 'string'],
+            'current_mention_rate' => ['sometimes', 'nullable', 'numeric', 'between:0,100'],
+            'semi_monthly_report_at' => ['sometimes', 'nullable', 'date'],
+            'optimization_difficulties_and_solutions' => ['sometimes', 'nullable', 'string'],
+            'publisher_user_id' => [$required, 'exists:users,id'],
+            'data_report_at' => ['sometimes', 'nullable', 'date'],
+        ]);
+        unset($data['id']);
+
+        if (array_key_exists('publisher_user_id', $data)) {
+            abort_unless(
+                User::query()
+                    ->whereKey($data['publisher_user_id'])
+                    ->whereHas('roles', fn ($role) => $role->where('alias', 'optimizer'))
+                    ->exists(),
+                422,
+                '发文人必须是优化师'
+            );
+        }
+
+        if ($id) {
+            $report = OrderOptimizationReport::findOrFail($id);
+            $this->access->authorizeView($report->order);
+            if (array_key_exists('order_id', $data)) {
+                abort_unless((int) $data['order_id'] === (int) $report->order_id, 422, '不能修改报告所属订单');
+                unset($data['order_id']);
+            }
+            $report->update($data);
+        } else {
+            $order = Order::findOrFail($data['order_id']);
+            $this->access->authorizeView($order);
+            $data['created_by'] = Auth::id();
+            $report = OrderOptimizationReport::create($data);
+        }
+
+        return $report->fresh()->load(['order:id,order_no,customer_legal_name', 'publisher:id,name,employee_no', 'creator:id,name,employee_no']);
+    }
+
+    public function deleteOptimizationReport(Request $request)
+    {
+        $data = $request->validate(['id' => ['required', 'exists:order_optimization_reports,id']]);
+        $report = OrderOptimizationReport::findOrFail($data['id']);
+        $this->access->authorizeView($report->order);
+        $report->delete();
+
+        return ['deleted' => true];
     }
 
     private function createDefaultMilestones(DeliveryProject $project): void

@@ -68,6 +68,7 @@ class OrderController extends Controller
             'technicalDirector:id,name,employee_no', 'optimizer:id,name,employee_no',
             'owner:id,name,employee_no', 'members.user:id,name,employee_no,department_id,position_name', 'stageLogs' => fn ($q) => $q->latest('operated_at'),
             'contracts', 'paymentPlans', 'payments', 'deliveryProject.milestones',
+            'optimizationReports.publisher:id,name,employee_no',
         ])->findOrFail($request->integer('id'));
         $this->access->authorizeView($order);
         $order->setAttribute('available_actions', $this->availableActions($order));
@@ -356,6 +357,34 @@ class OrderController extends Controller
         });
     }
 
+    public function finalPayment(Request $request)
+    {
+        $data = $request->validate([
+            'order_id' => ['required', 'exists:order,id'],
+            'final_payment_amount' => ['required', 'numeric', 'gt:0'],
+            'final_payment_screenshot_files' => ['required', 'array', 'min:1'],
+            'final_payment_screenshot_files.*' => ['required', 'url', 'max:1000'],
+        ]);
+        $order = Order::findOrFail($data['order_id']);
+        $this->access->authorizeView($order);
+        abort_if(
+            (float) $data['final_payment_amount'] > (float) $order->payable_amount,
+            422,
+            '尾款金额不能大于订单应付金额'
+        );
+
+        $order->update([
+            'final_payment_amount' => $data['final_payment_amount'],
+            'final_payment_screenshot_files' => $data['final_payment_screenshot_files'],
+        ]);
+
+        return $this->withActions($order->fresh()->load([
+            'customer:id,customer_no,legal_name,brand_name',
+            'optimizer:id,name,employee_no',
+            'owner:id,name,employee_no',
+        ]));
+    }
+
     public function optimizers()
     {
         return User::query()
@@ -386,6 +415,10 @@ class OrderController extends Controller
             'contract_no' => ['nullable', 'string', 'max:64', Rule::unique('order', 'contract_no')->ignore($id)],
             'contract_amount' => [$required, 'numeric', 'min:0'],
             'paid_amount' => ['sometimes', 'numeric', 'min:0'],
+            'final_payment_amount' => ['sometimes', 'numeric', 'min:0'],
+            'final_payment_screenshot_files' => ['sometimes', 'nullable', 'array'],
+            'final_payment_screenshot_files.*' => ['url', 'max:1000'],
+            'enterprise_target_mention_rate' => ['sometimes', 'nullable', 'numeric', 'between:0,100'],
             'payment_method' => ['nullable', Rule::in(['bank', 'wechat', 'alipay', 'cash', 'other'])],
             'payment_subject' => ['nullable', 'string', 'max:255'],
             'payment_due_date' => ['nullable', 'date'],

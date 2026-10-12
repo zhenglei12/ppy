@@ -64,6 +64,7 @@ Route::group(['namespace' => 'Admin', 'middleware' => ['cross', 'auth:sanctum', 
         Route::post('orders/assign', 'Business\\OrderController@assign')->name('business.orders.assign')->defaults('permission', 'sales.order.assign');
         Route::post('orders/status', 'Business\\OrderController@updateStatus')->name('business.orders.status')->defaults('permission', 'sales.order.status');
         Route::post('orders/refund', 'Business\\OrderController@refund')->name('business.orders.refund')->defaults('permission', 'sales.order.refund');
+        Route::post('orders/final-payment', 'Business\\OrderController@finalPayment')->name('business.orders.final-payment')->defaults('permission', 'sales.order.final_payment');
 
         Route::get('finance/dashboard', 'Business\\FinanceController@dashboard')->name('business.finance.dashboard')->defaults('permission', 'finance.view');
         Route::post('finance/payment-plans/list', 'Business\\FinanceController@plans')->name('business.finance.plans.list')->defaults('permission', 'finance.view');
@@ -88,6 +89,9 @@ Route::group(['namespace' => 'Admin', 'middleware' => ['cross', 'auth:sanctum', 
         Route::post('delivery/tasks/status', 'Business\\DeliveryController@taskStatus')->name('business.delivery.tasks.status')->defaults('permission', 'delivery.task.manage');
         Route::post('delivery/evidences/submit', 'Business\\DeliveryController@submitEvidence')->name('business.delivery.evidences.submit')->defaults('permission', 'delivery.evidence.submit');
         Route::post('delivery/evidences/review', 'Business\\DeliveryController@reviewEvidence')->name('business.delivery.evidences.review')->defaults('permission', 'delivery.quality.review');
+        Route::post('delivery/optimization-reports/list', 'Business\\DeliveryController@optimizationReports')->name('business.delivery.optimization-reports.list')->defaults('permission', 'delivery.optimization_report.list');
+        Route::post('delivery/optimization-reports/save', 'Business\\DeliveryController@saveOptimizationReport')->name('business.delivery.optimization-reports.save')->defaults('permission', 'delivery.optimization_report.save');
+        Route::post('delivery/optimization-reports/delete', 'Business\\DeliveryController@deleteOptimizationReport')->name('business.delivery.optimization-reports.delete')->defaults('permission', 'delivery.optimization_report.delete');
 
         Route::post('payroll/sheets/list', 'Business\\PayrollController@sheets')->name('business.payroll.sheets.list')->defaults('permission', 'hr.payroll.view');
         Route::get('payroll/sheets/detail', 'Business\\PayrollController@sheetDetail')->name('business.payroll.sheets.detail')->defaults('permission', 'hr.payroll.view');

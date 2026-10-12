@@ -15,7 +15,9 @@ class SyncWeiwenjiaExternalUsers extends Command
     {
         $base = rtrim(env('WEIWENJIA_THIRD_BASE_URL', 'https://external-connection.weiwenjia.com'), '/');
         $login = Http::timeout(30)->post(rtrim(env('WEIWENJIA_CRM_BASE_URL', 'https://lxcrm.weiwenjia.com'), '/') . '/api/v2/auth/login', [
-            'device' => 'open_api', 'login' => env('WEIWENJIA_CRM_LOGIN'), 'password' => env('WEIWENJIA_CRM_PASSWORD'),
+            'device' => 'open_api',
+            'login' => env('WEIWENJIA_CRM_LOGIN'),
+            'password' => env('WEIWENJIA_CRM_PASSWORD'),
         ]);
         $loginData = $login->json('data', []);
         $token = $loginData['crm_app_token'] ?? $loginData['user_token'] ?? null;
@@ -31,7 +33,7 @@ class SyncWeiwenjiaExternalUsers extends Command
         do {
             $response = Http::timeout(60)->withHeaders($headers)->post($base . '/third_api/users/list', ['operator_id' => $operatorId, 'page' => $page, 'per_page' => $size]);
             if (! $response->successful() || (int) $response->json('code', 1) !== 0) {
-                $this->error('微问家成员列表请求失败，页码：' . $page);
+                $this->error('微问家成员列表请求失败，页码：' . $page . '，HTTP ' . $response->status() . '，第三方 code=' . (string) $response->json('code', '') . '。请确认该登录账号已开通第三方接口权限。');
                 return self::FAILURE;
             }
             $data = $response->json('data', []);
