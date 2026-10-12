@@ -246,6 +246,15 @@ class DeliveryController extends Controller
         ]);
         unset($data['id']);
 
+        if (in_array('optimizer', $this->access->roles(), true)) {
+            abort_if(
+                array_key_exists('publisher_user_id', $data) && (int) $data['publisher_user_id'] !== (int) Auth::id(),
+                403,
+                '优化师只能以本人作为发文人'
+            );
+            $data['publisher_user_id'] = Auth::id();
+        }
+
         if (array_key_exists('publisher_user_id', $data)) {
             abort_unless(
                 User::query()

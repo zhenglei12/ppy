@@ -387,8 +387,7 @@ class OrderController extends Controller
         $data = $request->validate([
             'order_id' => ['required', 'exists:order,id'],
             'final_payment_amount' => ['required', 'numeric', 'gt:0'],
-            'final_payment_screenshot_files' => ['required', 'array', 'min:1'],
-            'final_payment_screenshot_files.*' => ['required', 'url', 'max:1000'],
+            'final_payment_screenshot_files' => ['required', 'url', 'max:1000'],
         ]);
         $order = Order::findOrFail($data['order_id']);
         $this->access->authorizeView($order);
@@ -441,8 +440,7 @@ class OrderController extends Controller
             'contract_amount' => [$required, 'numeric', 'min:0'],
             'paid_amount' => ['sometimes', 'numeric', 'min:0'],
             'final_payment_amount' => ['sometimes', 'numeric', 'min:0'],
-            'final_payment_screenshot_files' => ['sometimes', 'nullable', 'array'],
-            'final_payment_screenshot_files.*' => ['url', 'max:1000'],
+            'final_payment_screenshot_files' => ['sometimes', 'nullable', 'url', 'max:1000'],
             'enterprise_target_mention_rate' => ['sometimes', 'nullable', 'numeric', 'between:0,100'],
             'payment_method' => ['nullable', Rule::in(['bank', 'wechat', 'alipay', 'cash', 'other'])],
             'payment_subject' => ['nullable', 'string', 'max:255'],
