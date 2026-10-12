@@ -26,7 +26,7 @@ class SalesController extends Controller
             ->groupBy('current_stage')->pluck('total', 'current_stage');
         $healthDistribution = (clone $orders)->select('health_status', DB::raw('count(*) as total'))
             ->groupBy('health_status')->pluck('total', 'health_status');
-        $ranking = (clone $orders)->select('sales_user_id', DB::raw('count(*) as order_count'), DB::raw('sum(payable_amount) as payable_amount'))
+        $ranking = (clone $orders)->select('sales_user_id', DB::raw('count(*) as order_count'), DB::raw('sum(GREATEST(payable_amount - final_payment_amount, 0)) as payable_amount'))
             ->whereNotNull('sales_user_id')->groupBy('sales_user_id')->orderByDesc('order_count')->limit(10)
             ->with('salesUser:id,name,department_id')->get();
 
@@ -43,9 +43,10 @@ class SalesController extends Controller
         return [
             'order_count' => (clone $orders)->count(),
             'month_order_count' => (clone $orders)->whereBetween('created_at', [$monthStart, $monthEnd])->count(),
-            'payable_amount' => (clone $orders)->sum('payable_amount'),
+            'payable_amount' => (clone $orders)->sum(DB::raw('GREATEST(payable_amount - final_payment_amount, 0)')),
+            'final_payment_amount' => (clone $orders)->sum('final_payment_amount'),
             'paid_amount' => (clone $orders)->sum('paid_amount'),
-            'receivable_amount' => (clone $orders)->sum('receivable_amount'),
+            'receivable_amount' => (clone $orders)->sum(DB::raw('GREATEST(receivable_amount - final_payment_amount, 0)')),
             'pending_review_count' => (clone $orders)->whereIn('current_stage', ['draft', 'sales_review'])->count(),
             'stalled_count' => (clone $orders)->whereNotNull('next_action_at')->where('next_action_at', '<', now())->count(),
             'new_customer_count' => $customerQuery->count(),

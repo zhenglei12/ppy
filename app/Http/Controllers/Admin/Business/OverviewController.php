@@ -50,12 +50,14 @@ class OverviewController extends Controller
             'orders' => [
                 'count' => (clone $activeOrders)->count(),
                 'payable_amount' => (clone $activeOrders)->sum('payable_amount'),
-                'receivable_amount' => (clone $activeOrders)->sum('receivable_amount'),
+                'final_payment_amount' => (clone $activeOrders)->sum('final_payment_amount'),
+                'receivable_amount' => (clone $activeOrders)->sum(DB::raw('GREATEST(receivable_amount - final_payment_amount, 0)')),
                 'stage_distribution' => (clone $activeOrders)->select('current_stage', DB::raw('count(*) as total'))->groupBy('current_stage')->pluck('total', 'current_stage'),
             ],
             'finance' => [
                 'confirmed_amount' => Payment::whereIn('order_id', $orderIds)->where('confirmation_status', 'confirmed')->sum('amount'),
-                'receivable_amount' => (clone $activeOrders)->sum('receivable_amount'),
+                'final_payment_amount' => (clone $activeOrders)->sum('final_payment_amount'),
+                'receivable_amount' => (clone $activeOrders)->sum(DB::raw('GREATEST(receivable_amount - final_payment_amount, 0)')),
                 'overdue_amount' => PaymentPlan::whereIn('order_id', $orderIds)->whereIn('status', ['pending', 'partial', 'overdue'])->whereDate('due_date', '<', today())->sum(DB::raw('planned_amount - paid_amount')),
             ],
             'delivery' => [
